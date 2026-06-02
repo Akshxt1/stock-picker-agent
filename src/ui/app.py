@@ -599,7 +599,7 @@ def render_ptab(market=None, pfx="all"):
 
     st.dataframe(
         df.style
-        .applymap(lambda v: f"color: {'#10b981' if v>=0 else '#ef4444'}", subset=["P&L %"])
+        .map(lambda v: f"color: {'#10b981' if v>=0 else '#ef4444'}", subset=["P&L %"])
         .format({"P&L %": "{:+.2f}%"})
         .hide(axis="index"),
         use_container_width=True,
