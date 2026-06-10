@@ -1,4 +1,41 @@
+# Secrets — never commit these
 .env
-.venv
-__pycache__
+*.env
+
+# Virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Database — contains real user data
+src/database/stock_picker.db
+src/database/*.db
+
+# Scheduler settings (local config)
+scheduler_settings.json
+
+# Test/debug scripts
+diagnose.py
+fix_all.py
+fix_portfolio.py
+make_admin.py
+check_portfolio.py
+run_test.py
+check_imports.py
+test_tools.py
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

@@ -1,136 +1,111 @@
-# src/agents/portfolio_analyzer.py
-#
-# Analyzes each open portfolio position using Claude Haiku.
-# Gives a fast, data-backed Hold / Sell / Buy More recommendation.
-# Runs per-position in ~5 seconds. Much cheaper than a full crew run.
+# src/agents/portfolio_analyzer.py  — v2
+# Saves AI recommendations back to the portfolio DB row
 
-import os, json, re
-import anthropic
+import os, json, re, anthropic
 from dotenv import load_dotenv
-
 load_dotenv()
 
 
 def analyze_position(pos: dict) -> dict:
-    """
-    Analyze one portfolio position and return a recommendation.
-
-    Args:
-        pos: dict from get_portfolio() — has ticker, entry_price,
-             current_price, pnl_pct, days_held, currency, etc.
-
-    Returns:
-        dict with action, confidence, summary, reasons, stop_loss, target_price
-    """
-    ticker   = pos.get("ticker", "")
-    currency = pos.get("currency", "USD")
+    ticker   = pos.get("ticker","")
+    currency = pos.get("currency","USD")
     cur_sym  = "₹" if currency == "INR" else "$"
 
-    # ── Get fresh technical + sentiment data ────────────────────────────────
     tech, sent = {}, {}
     try:
         from src.tools.technical_indicators import get_technical_indicators
         tech = get_technical_indicators.func(ticker)
-    except Exception:
-        pass
+    except Exception: pass
     try:
         from src.tools.news_sentiment import get_stock_sentiment
         sent = get_stock_sentiment.func(ticker)
-    except Exception:
-        pass
+    except Exception: pass
 
     headlines = "\n".join(
-        f"  • {h}" for h in sent.get("recent_headlines", [])[:4]
-    ) or "  No recent headlines available"
+        f"  • {h}" for h in sent.get("recent_headlines",[])[:4]
+    ) or "  No recent headlines"
 
-    prompt = f"""You are a portfolio analyst. Analyze this stock position and give a precise recommendation.
+    entry  = pos.get("entry_price", 0)
+    curr   = pos.get("current_price", 0)
+    pnl    = pos.get("pnl_pct", 0)
+
+    # Suggested stop loss and target based on ATR
+    atr        = tech.get("atr") or 0
+    atr_pct    = round((atr / curr) * 100, 2) if curr else 2.0
+    stop_hint  = round(curr * (1 - atr_pct / 100 * 2), 2)
+    target_hint= round(curr * (1 + atr_pct / 100 * 3), 2)
+
+    prompt = f"""You are a portfolio risk manager. Analyse this position concisely.
 
 POSITION
-  Ticker    : {ticker}  ({pos.get('company','')})
-  Sector    : {pos.get('sector','Unknown')}
-  Market    : {pos.get('market','Unknown')}
-  Entry     : {cur_sym}{pos.get('entry_price',0):,.2f}
-  Current   : {cur_sym}{pos.get('current_price',0):,.2f}
-  P&L       : {pos.get('pnl_pct',0):+.2f}%  ({cur_sym}{pos.get('pnl_amount',0):+,.2f})
-  Qty       : {pos.get('quantity',0):.0f} shares
-  Days Held : {pos.get('days_held',0)}
+  Ticker      : {ticker}
+  Company     : {pos.get('company','')}
+  Entry       : {cur_sym}{entry:,.2f}
+  Current     : {cur_sym}{curr:,.2f}
+  P&L         : {pnl:+.2f}%
+  Qty         : {pos.get('quantity',0):.0f} shares
+  Days Held   : {pos.get('days_held',0)}
 
 TECHNICALS
-  RSI              : {tech.get('rsi','N/A')}  →  {tech.get('rsi_signal','N/A')}
-  MACD             : {tech.get('macd_signal_label','N/A')}
-  EMA Trend        : {tech.get('ema_trend','N/A')}
-  Bollinger        : {tech.get('bb_signal','N/A')}
-  Technical Score  : {tech.get('technical_score','N/A')} / 4
-  Overall Signal   : {tech.get('overall_signal','N/A')}
-  ATR (volatility) : {tech.get('atr','N/A')}
+  RSI         : {tech.get('rsi','N/A')}  →  {tech.get('rsi_signal','N/A')}
+  MACD        : {tech.get('macd_signal_label','N/A')}
+  EMA Trend   : {tech.get('ema_trend','N/A')}
+  Overall     : {tech.get('overall_signal','N/A')}  (score {tech.get('technical_score','N/A')}/4)
 
-SENTIMENT  :  {sent.get('overall_sentiment','N/A')}
-NEWS (recent)
+SENTIMENT    : {sent.get('overall_sentiment','N/A')}
+NEWS
 {headlines}
 
-TASK
-Based on the data above give one of these recommendations:
-  HOLD      — keep the position, thesis intact
-  SELL      — exit now, risk outweighs reward
-  BUY_MORE  — add to the position, strong setup
+ATR hint: stop ~{cur_sym}{stop_hint:,.2f} | target ~{cur_sym}{target_hint:,.2f}
 
-Rules:
-  - Use actual numbers from the data (RSI value, P&L %, ATR, etc.)
-  - Be honest — if the thesis is broken, say SELL even if it hurts
-  - stop_loss and target_price must be in the same currency as the position ({cur_sym})
-  - Keep summary under 20 words
-  - Give exactly 3 reason bullets, each under 25 words
+Give ONE clear recommendation with a concise 1-sentence summary and exactly 2 reasons.
 
-Respond ONLY with valid JSON, no markdown fences, no extra text:
+Respond ONLY with this JSON (no markdown):
 {{
   "action": "HOLD",
   "confidence": "High",
-  "summary": "Short one-line verdict here",
-  "reasons": ["reason 1", "reason 2", "reason 3"],
-  "stop_loss": null,
-  "target_price": null
+  "summary": "One clear sentence — max 15 words",
+  "reasons": ["reason 1 with a number", "reason 2 with a number"],
+  "stop_loss": {stop_hint},
+  "target_price": {target_hint}
 }}"""
 
     try:
         client   = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         response = client.messages.create(
-            model      = "claude-haiku-4-5-20251001",
-            max_tokens = 600,
-            messages   = [{"role": "user", "content": prompt}],
+            model="claude-haiku-4-5-20251001", max_tokens=400,
+            messages=[{"role":"user","content":prompt}],
         )
-        raw  = response.content[0].text
-        raw  = re.sub(r"```json|```", "", raw).strip()
+        raw  = re.sub(r"```json|```","",response.content[0].text).strip()
         data = json.loads(raw)
         data["ticker"] = ticker
-        return data
 
+        # Save result back to portfolio DB
+        if pos.get("id"):
+            try:
+                from src.database.paper_trading import save_ai_analysis
+                save_ai_analysis(pos["id"], data)
+            except Exception as e:
+                print(f"  [save_ai] {e}")
+
+        return data
     except Exception as e:
         return {
             "ticker":       ticker,
             "action":       "HOLD",
             "confidence":   "Low",
-            "summary":      f"Analysis unavailable: {str(e)[:60]}",
+            "summary":      f"Analysis unavailable",
             "reasons":      [],
-            "stop_loss":    None,
-            "target_price": None,
+            "stop_loss":    stop_hint,
+            "target_price": target_hint,
         }
 
 
-def analyze_all_positions(market: str = None) -> list[dict]:
-    """
-    Analyze every open portfolio position.
-
-    Args:
-        market: "INDIA", "US", or None for all
-
-    Returns:
-        list of analysis dicts, one per position
-    """
+def analyze_all_positions(market: str = None, user_id: str = None) -> list:
     from src.database.paper_trading import get_portfolio
-    positions = get_portfolio(market=market)
+    positions = get_portfolio(market=market, username=user_id)
     results   = []
     for pos in positions:
         print(f"  Analysing {pos['ticker']}...")
-        result = analyze_position(pos)
-        results.append(result)
+        results.append(analyze_position(pos))
     return results
