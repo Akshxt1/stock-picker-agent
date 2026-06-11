@@ -123,6 +123,23 @@ div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1
 /* Guest banner */
 .guest-banner{background:rgba(100,116,139,.08);border:1px solid rgba(100,116,139,.2);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#64748b;margin-bottom:1rem;}
 
+/* Sidebar reopen button — visible indigo pill on left edge */
+[data-testid="collapsedControl"] {
+    background: rgba(99,102,241,0.28) !important;
+    border: 1.5px solid rgba(99,102,241,0.55) !important;
+    border-left: none !important;
+    border-radius: 0 10px 10px 0 !important;
+    min-height: 56px !important;
+    min-width: 26px !important;
+}
+[data-testid="collapsedControl"] svg {
+    fill: #818cf8 !important;
+    color: #818cf8 !important;
+}
+[data-testid="collapsedControl"]:hover {
+    background: rgba(99,102,241,0.45) !important;
+}
+
 /* Login */
 .login-wrap{max-width:440px;margin:60px auto 0;padding:0 1rem;}
 .login-card{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:36px 32px;}
@@ -174,56 +191,6 @@ US_SYMS    = ("AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA",
 SCHED_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "scheduler_settings.json")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# HAMBURGER — persistent sidebar toggle via JS injection
-# ═══════════════════════════════════════════════════════════════════════════════
-def inject_hamburger():
-    components.html("""
-    <script>
-    (function() {
-      function styleToggle() {
-        var selectors = [
-          '[data-testid="collapsedControl"]',
-          'button[aria-label*="sidebar"]',
-          'button[aria-label*="menu"]',
-          '.st-emotion-cache-1egp75f'
-        ];
-        for (var i = 0; i < selectors.length; i++) {
-          var btn = window.parent.document.querySelector(selectors[i]);
-          if (btn) {
-            btn.style.cssText = [
-              'display:flex !important',
-              'visibility:visible !important',
-              'opacity:1 !important',
-              'background:rgba(99,102,241,0.28) !important',
-              'border:1.5px solid rgba(99,102,241,0.55) !important',
-              'border-radius:0 10px 10px 0 !important',
-              'color:#818cf8 !important',
-              'width:30px !important',
-              'min-height:52px !important',
-              'position:fixed !important',
-              'left:0 !important',
-              'top:50% !important',
-              'transform:translateY(-50%) !important',
-              'z-index:9999999 !important',
-              'cursor:pointer !important',
-              'box-shadow:3px 0 16px rgba(99,102,241,0.25) !important'
-            ].join(';');
-            return true;
-          }
-        }
-        return false;
-      }
-      styleToggle();
-      setTimeout(styleToggle, 400);
-      setTimeout(styleToggle, 1200);
-      var mo = new MutationObserver(styleToggle);
-      mo.observe(window.parent.document.body, {childList:true, subtree:true});
-    })();
-    </script>
-    """, height=0, scrolling=False)
-
-inject_hamburger()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -381,7 +348,16 @@ def render_pick_card(p, prefix="", user_tickers:set=None):
     cur        = cs(p.currency or p.market)
     sym        = p.ticker.replace(".NS","").replace(".BO","")
     already_in = p.ticker in (user_tickers or set())
-    why_short  = (p.why_buy[0][:70]+"…") if p.why_buy else "—"
+    why_short  = (p.why_buy[0][:70]+"…") 
+    if p.why_buy:
+        raw = p.why_buy[0]
+        if len(raw) > 80:
+            cut = raw[:80].rfind(" ")
+            why_short = raw[:cut] + "…" if cut > 0 else raw[:80] + "…"
+        else:
+            why_short = raw
+    else:
+        why_short: str = f"{p.sentiment or 'Neutral'} signal · {p.sector} · {p.size} Cap"
 
     st.markdown(f"""
     <div class="pk">
