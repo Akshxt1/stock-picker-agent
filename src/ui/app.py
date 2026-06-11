@@ -5,7 +5,6 @@ import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import yfinance as yf
 import pytz, json
@@ -140,6 +139,22 @@ div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1
     background: rgba(99,102,241,0.45) !important;
 }
 
+/* Sidebar reopen button — visible on left edge when collapsed */
+[data-testid="collapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: rgba(99,102,241,0.3) !important;
+    border: 1.5px solid rgba(99,102,241,0.55) !important;
+    border-left: none !important;
+    border-radius: 0 10px 10px 0 !important;
+    min-height: 56px !important;
+    min-width: 26px !important;
+}
+[data-testid="collapsedControl"] svg {
+    fill: #818cf8 !important;
+}
+
 /* Login */
 .login-wrap{max-width:440px;margin:60px auto 0;padding:0 1rem;}
 .login-card{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:36px 32px;}
@@ -222,20 +237,26 @@ def run_denied_msg():
 # DATA HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=300)
-def fetch_tape(syms:tuple,cur:str)->list:
-    try:
-        raw=yf.download(list(syms),period="2d",auto_adjust=True,progress=False,threads=True)
-        close=raw["Close"] if isinstance(raw.columns,pd.MultiIndex) else raw
-        out=[]
-        for s in syms:
-            try:
-                col=close[s];p=float(col.iloc[-1])
-                prev=float(col.iloc[-2]) if len(col)>=2 else p
-                chg=(p-prev)/prev*100 if prev else 0.0
-                out.append({"sym":s.replace(".NS","").replace(".BO",""),"p":p,"chg":chg,"cur":cur})
-            except Exception: pass
-        return out
-    except Exception: return []
+def fetch_tape(syms: tuple, cur: str) -> list:
+    out = []
+    for s in syms:
+        try:
+            hist = yf.Ticker(s).history(period="2d", auto_adjust=True)
+            if hist.empty or len(hist) < 1:
+                continue
+            p    = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else p
+            # Skip NaN values
+            if p != p or prev != prev:
+                continue
+            chg = (p - prev) / prev * 100 if prev else 0.0
+            out.append({
+                "sym": s.replace(".NS","").replace(".BO",""),
+                "p": p, "chg": chg, "cur": cur
+            })
+        except Exception:
+            continue   # skip any stock that fails, don't crash the whole ticker
+    return out
 
 @st.cache_data(ttl=60)
 def market_status()->dict:
