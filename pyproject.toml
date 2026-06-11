@@ -13,6 +13,7 @@ dependencies = [
     "finnhub-python>=2.4.28",
     "pandas>=2.3.3",
     "pandas-ta>=0.4.71b0",
+    "plotly>=6.8.0",
     "python-dotenv>=1.2.2",
     "pytz>=2026.2",
     "sqlalchemy>=2.0.49",
