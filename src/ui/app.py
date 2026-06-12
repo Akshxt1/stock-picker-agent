@@ -673,7 +673,7 @@ with st.sidebar:
     if st.button("⎋ Sign Out",use_container_width=True,key="signout"):
         if ACCOUNT_TYPE!="guest":
             try:
-                from src.auth.supabase_auth import sign_out
+                from src.auth.supabase_client import sign_out
                 sign_out()
             except Exception: pass
         del st.session_state["user"];st.rerun()
@@ -913,7 +913,7 @@ elif page=="Settings":
                 elif len(np1)<6:st.error("Minimum 6 characters.")
                 else:
                     try:
-                        from src.auth.supabase_auth import get_client
+                        from src.auth.supabase_client import get_client
                         get_client().auth.update_user({"password":np1})
                         st.success("✅ Password updated.")
                     except Exception as e:st.error(str(e))
