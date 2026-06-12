@@ -1,6 +1,4 @@
-# src/agents/tasks.py  — v2 (Stronger, Stricter Quality Gate)
-# Agents now ONLY recommend stocks with confirmed bullish signals.
-# Low confidence and bearish picks are REJECTED at the Master Analyst stage.
+# src/agents/tasks.py 
 
 from crewai import Task
 from src.agents.agents import (
@@ -8,7 +6,7 @@ from src.agents.agents import (
     create_sentiment_analyst, create_master_analyst,
 )
 from datetime import datetime
-
+import re
 
 def create_tasks(market: str, sector: str, size: str, tickers: list):
     researcher        = create_researcher()
@@ -16,7 +14,9 @@ def create_tasks(market: str, sector: str, size: str, tickers: list):
     sentiment_analyst = create_sentiment_analyst()
     master_analyst    = create_master_analyst()
 
-    ticker_list = ", ".join(tickers)
+    # Sanitize tickers to prevent prompt injection
+    safe_tickers = [re.sub(r'[^A-Z0-9.\-]', '', str(t).upper()) for t in tickers]
+    ticker_list = ", ".join(safe_tickers)
     today       = datetime.today().strftime("%Y-%m-%d")
 
     # ── Task 1: Research ──────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ def create_tasks(market: str, sector: str, size: str, tickers: list):
             f"Present structured data for every ticker before continuing."
         ),
         expected_output=(
-            f"Structured data for each of the {len(tickers)} tickers with all metrics listed. "
+            f"Structured data for each of the {len(safe_tickers)} tickers with all metrics listed. "
             f"Clearly flag any HIGH RISK, DECLINING, or SEVERE DOWNTREND stocks."
         ),
         agent=researcher,
@@ -134,7 +134,8 @@ def create_tasks(market: str, sector: str, size: str, tickers: list):
             f"  why_not_buy: 2 honest risk bullet points\n"
             f"  stop_loss_pct: how many % below entry to set stop loss (e.g. 8 means 8% below)\n"
             f"  target_pct: upside target % from current price (realistic, data-backed)\n\n"
-            f"Output ONLY valid JSON:\n"
+            f"CRITICAL INSTRUCTION: Output ONLY valid JSON. DO NOT WRAP IN MARKDOWN BACKTICKS. "
+            f"DO NOT INCLUDE CONVERSATIONAL TEXT like 'Here is the JSON'. Output the raw JSON directly:\n"
             f'{{\n'
             f'  "market": "{market}",\n'
             f'  "sector": "{sector}",\n'
@@ -160,7 +161,8 @@ def create_tasks(market: str, sector: str, size: str, tickers: list):
         expected_output=(
             f"Valid JSON with market, sector, size, analysis_date={today}, and picks array. "
             f"Only Medium/High confidence stocks with Bullish/Neutral signals. "
-            f"Empty picks array is acceptable if no stock passes the quality gate."
+            f"Empty picks array is acceptable if no stock passes the quality gate. "
+            f"OUTPUT MUST BE PURE JSON FORMAT WITH NO EXTRA TEXT."
         ),
         agent=master_analyst,
         context=[task_research, task_technical, task_sentiment],

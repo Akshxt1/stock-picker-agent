@@ -1,7 +1,7 @@
-# src/ui/app.py  — v4 (Clickable stock cards + hamburger fix)
+# src/ui/app.py  — Production v1.6 (Final Polish & State Locks)
 # Run: uv run streamlit run src/ui/app.py
 
-import sys, os
+import sys, os, html
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import streamlit as st
@@ -9,7 +9,6 @@ import pandas as pd
 import yfinance as yf
 import pytz, json
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import or_
 from streamlit_option_menu import option_menu
 
 from src.database.models        import init_db, Session, Pick, Portfolio, get_usage_stats
@@ -22,9 +21,11 @@ st.set_page_config(page_title="StockPicker Terminal", page_icon="📊",
                    layout="wide", initial_sidebar_state="expanded")
 init_db()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CSS
-# ═══════════════════════════════════════════════════════════════════════════════
+if "running_crew" not in st.session_state: st.session_state.running_crew = False
+if "running_analysis" not in st.session_state: st.session_state.running_analysis = False
+if "quick_run" not in st.session_state: st.session_state.quick_run = False
+
+
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
@@ -32,13 +33,11 @@ st.markdown("""
 html,body,[class*="css"]{font-family:'Outfit',sans-serif;color:#e2e8f0;}
 .stApp{background:#07080f;}
 
-/* FIX 1: Keep the header visible so the sidebar toggle works, but hide the default Streamlit menu */
 #MainMenu, footer {visibility:hidden;}
 header[data-testid="stHeader"] {background: transparent !important;}
 
 .block-container{padding:0 2rem 3rem !important;max-width:100% !important;}
 
-/* FIX 2: Removed "padding: 0 !important" to prevent the option_menu iframe from collapsing */
 section[data-testid="stSidebar"]>div:first-child{
     background:#0b0d17 !important;
     border-right:1px solid rgba(255,255,255,0.05) !important;
@@ -50,7 +49,6 @@ section[data-testid="stSidebar"]>div:first-child{
 .nav-link .nav-link-label{font-size:13px !important;font-weight:400;}
 .nav-link-selected .nav-link-label{font-weight:500 !important;color:#818cf8 !important;}
 
-/* Ticker */
 .ticker-outer{overflow:hidden;width:100%;padding:7px 0;}
 .ticker-outer.india{background:linear-gradient(90deg,#0f0800,#0b0d17 40%,#0b0d17 60%,#0f0800);border-bottom:1.5px solid rgba(249,115,22,0.25);}
 .ticker-outer.us{background:linear-gradient(90deg,#05091a,#0b0d17 40%,#0b0d17 60%,#05091a);border-bottom:1.5px solid rgba(99,102,241,0.25);}
@@ -60,7 +58,6 @@ section[data-testid="stSidebar"]>div:first-child{
 .t-chip{display:inline-flex;align-items:center;gap:8px;padding:0 20px;border-right:1px solid rgba(255,255,255,0.05);font-family:'IBM Plex Mono',monospace;font-size:11.5px;}
 .t-name{color:#475569;}.t-price{color:#cbd5e1;font-weight:500;}.t-up{color:#10b981;font-size:10.5px;}.t-dn{color:#ef4444;font-size:10.5px;}
 
-/* Market bar */
 .mbar{display:flex;align-items:center;justify-content:space-between;padding:14px 0 16px;border-bottom:1px solid rgba(255,255,255,0.04);margin-bottom:1.6rem;}
 .app-brand{font-size:20px;font-weight:700;letter-spacing:-0.5px;background:linear-gradient(120deg,#c7d2fe,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
 .app-sub{font-size:10px;color:#334155;letter-spacing:.12em;text-transform:uppercase;margin-top:2px;}
@@ -71,7 +68,6 @@ section[data-testid="stSidebar"]>div:first-child{
 .mk-dot.on{background:#10b981;animation:blink 2s infinite;}.mk-dot.off{background:#ef4444;}
 @keyframes blink{0%,100%{opacity:1;}60%{opacity:.3;}}
 
-/* Metrics */
 .metric-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.8rem;}
 .mc{background:rgba(255,255,255,0.022);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:16px 18px;transition:border-color .2s;}
 .mc:hover{border-color:rgba(255,255,255,0.12);}
@@ -80,7 +76,6 @@ section[data-testid="stSidebar"]>div:first-child{
 .mc-sub{font-size:12px;margin-top:5px;}
 .c-up{color:#10b981;}.c-dn{color:#ef4444;}.c-mu{color:#64748b;}
 
-/* Pick cards — Groww style */
 .pk{background:rgba(255,255,255,0.022);border:1px solid rgba(255,255,255,0.06);border-radius:12px;overflow:hidden;margin-bottom:10px;transition:border-color .2s,transform .15s;}
 .pk:hover{border-color:rgba(255,255,255,0.14);transform:translateY(-1px);}
 .pk-top{padding:14px 16px 10px;border-left:3px solid transparent;}
@@ -97,7 +92,6 @@ section[data-testid="stSidebar"]>div:first-child{
 .b-med{background:rgba(148,163,184,.1);color:#94a3b8;}
 .b-low{background:rgba(100,116,139,.08);color:#64748b;}
 
-/* AI analysis cards */
 .ai-card{border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px;}
 .ai-action-pill{min-width:68px;padding:6px 10px;border-radius:8px;text-align:center;font-size:12px;font-weight:700;flex-shrink:0;}
 .ai-body{flex:1;min-width:0;}
@@ -107,30 +101,26 @@ section[data-testid="stSidebar"]>div:first-child{
 .ai-level-lbl{color:#475569;font-size:11px;}
 .ai-level-val{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500;}
 
-/* Section divider */
 .sdiv{font-size:10.5px;font-weight:500;color:#334155;text-transform:uppercase;letter-spacing:.1em;margin:1.8rem 0 1rem;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.04);}
 
-/* Tabs */
 button[data-baseweb="tab"]{background:transparent !important;border-radius:8px !important;color:#64748b !important;font-size:13px !important;font-family:'Outfit',sans-serif !important;padding:8px 28px !important;font-weight:400 !important;border:none !important;margin:0 2px !important;}
 button[data-baseweb="tab"]:hover{background:rgba(255,255,255,0.04) !important;color:#94a3b8 !important;}
 button[data-baseweb="tab"][aria-selected="true"]{background:rgba(99,102,241,0.15) !important;color:#818cf8 !important;font-weight:500 !important;}
 div[data-baseweb="tab-border"],div[data-baseweb="tab-highlight"]{display:none !important;}
 div[data-baseweb="tab-list"]{background:rgba(255,255,255,0.02) !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:10px !important;padding:4px !important;gap:0 !important;margin-bottom:1.2rem !important;}
 
-/* Widgets */
 .stSelectbox>div>div{background:rgba(255,255,255,0.03) !important;border-color:rgba(255,255,255,0.08) !important;font-size:13px !important;border-radius:8px !important;}
 .stNumberInput input,.stTextInput input{background:rgba(255,255,255,0.03) !important;border-color:rgba(255,255,255,0.08) !important;font-size:13px !important;border-radius:8px !important;color:#e2e8f0 !important;}
 .stButton>button{background:rgba(99,102,241,0.12) !important;border:1px solid rgba(99,102,241,0.25) !important;color:#818cf8 !important;font-size:13px !important;border-radius:8px !important;font-family:'Outfit',sans-serif !important;font-weight:500 !important;padding:6px 18px !important;transition:all .18s !important;}
 .stButton>button:hover{background:rgba(99,102,241,0.2) !important;border-color:rgba(99,102,241,0.4) !important;color:#c7d2fe !important;}
 .stButton>button[kind="primary"]{background:#4f46e5 !important;border-color:#4f46e5 !important;color:white !important;}
 .stButton>button[kind="primary"]:hover{background:#4338ca !important;}
+.stButton>button:disabled{opacity:0.5 !important;cursor:not-allowed !important;}
 div[data-testid="stExpander"]{background:rgba(255,255,255,0.018) !important;border-color:rgba(255,255,255,0.06) !important;border-radius:8px !important;}
 div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1px solid rgba(255,255,255,0.06) !important;border-radius:10px !important;padding:16px !important;}
 
-/* Guest banner */
 .guest-banner{background:rgba(100,116,139,.08);border:1px solid rgba(100,116,139,.2);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#64748b;margin-bottom:1rem;}
 
-/* FIX 3: Cleaned up the duplicate collapsedControl CSS block */
 [data-testid="collapsedControl"] {
     display: flex !important;
     visibility: visible !important;
@@ -151,7 +141,6 @@ div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1
     background: rgba(99,102,241,0.45) !important;
 }
 
-/* Login */
 .login-wrap{max-width:440px;margin:60px auto 0;padding:0 1rem;}
 .login-card{background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:36px 32px;}
 .login-brand{font-size:28px;font-weight:700;background:linear-gradient(120deg,#c7d2fe,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;text-align:center;margin-bottom:4px;}
@@ -166,9 +155,6 @@ div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1
 """, unsafe_allow_html=True)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AUTH GATE
-# ═══════════════════════════════════════════════════════════════════════════════
 if "user" not in st.session_state:
     st.markdown("""<style>section[data-testid="stSidebar"]{display:none !important;}
     .block-container{max-width:460px !important;margin:0 auto !important;}</style>""",
@@ -199,39 +185,28 @@ INDIA_SYMS = ("RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
                "HINDUNILVR.NS","NTPC.NS","MARUTI.NS","AXISBANK.NS","ADANIENT.NS")
 US_SYMS    = ("AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA",
                "JPM","V","UNH","AMD","CRM","NFLX","GS","INTC")
-SCHED_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "scheduler_settings.json")
 
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ACCOUNT HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
 def can_run_analysis():
-    if ACCOUNT_TYPE=="guest": return False
-    if ACCOUNT_TYPE in ("admin","premium"): return True
+    if ACCOUNT_TYPE == "guest": return False
+    if ACCOUNT_TYPE in ("admin", "premium"): return True
     from src.database.models import ApiUsage
-    sess=Session()
-    week_ago=datetime.now(timezone.utc).replace(tzinfo=None)-timedelta(days=7)
-    runs=sess.query(ApiUsage).filter(ApiUsage.user_id==CURRENT_UID,ApiUsage.timestamp>=week_ago).count()
-    sess.close(); return runs<3
+    with Session() as sess:
+        week_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+        runs = sess.query(ApiUsage).filter(ApiUsage.user_id == CURRENT_UID, ApiUsage.timestamp >= week_ago).count()
+        return runs < 3
 
 def runs_remaining():
-    if ACCOUNT_TYPE!="free": return None
+    if ACCOUNT_TYPE != "free": return None
     from src.database.models import ApiUsage
-    sess=Session()
-    week_ago=datetime.now(timezone.utc).replace(tzinfo=None)-timedelta(days=7)
-    used=sess.query(ApiUsage).filter(ApiUsage.user_id==CURRENT_UID,ApiUsage.timestamp>=week_ago).count()
-    sess.close(); return max(0,3-used)
+    with Session() as sess:
+        week_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+        used = sess.query(ApiUsage).filter(ApiUsage.user_id == CURRENT_UID, ApiUsage.timestamp >= week_ago).count()
+        return max(0, 3 - used)
 
 def run_denied_msg():
-    if ACCOUNT_TYPE=="guest": return "👁 Guest accounts cannot run analysis."
+    if ACCOUNT_TYPE == "guest": return "👁 Guest accounts cannot run analysis."
     return "⏳ Weekly limit reached (3/3). Upgrade to Premium."
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DATA HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=300)
 def fetch_tape(syms: tuple, cur: str) -> list:
     out = []
@@ -242,7 +217,6 @@ def fetch_tape(syms: tuple, cur: str) -> list:
                 continue
             p    = float(hist["Close"].iloc[-1])
             prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else p
-            # Skip NaN values
             if p != p or prev != prev:
                 continue
             chg = (p - prev) / prev * 100 if prev else 0.0
@@ -251,7 +225,7 @@ def fetch_tape(syms: tuple, cur: str) -> list:
                 "p": p, "chg": chg, "cur": cur
             })
         except Exception:
-            continue   # skip any stock that fails, don't crash the whole ticker
+            continue   
     return out
 
 @st.cache_data(ttl=60)
@@ -265,22 +239,20 @@ def market_status()->dict:
         "nyse": {"open":ne.weekday()<5 and 9*60+30<=m(ne)<=16*60,   "time":ne.strftime("%I:%M %p ET"), "label":"NYSE / NASDAQ"},
     }
 
-@st.cache_data(ttl=60)
 def get_user_open_tickers(uid:str)->set:
     if not uid or uid=="guest": return set()
-    sess=Session()
-    rows=sess.query(Portfolio).filter(
-        Portfolio.is_open==True,
-        or_(Portfolio.user_id==uid,Portfolio.username==uid)).all()
-    sess.close(); return {r.ticker for r in rows}
+    with Session() as sess:
+        rows = sess.query(Portfolio).filter(
+            Portfolio.is_open==True,
+            Portfolio.user_id==uid
+        ).all()
+        return {r.ticker for r in rows}
 
-@st.cache_data(ttl=120)
 def cached_portfolio(market=None,uid=None):
-    return get_portfolio(market=market,username=uid)
+    return get_portfolio(market=market, user_id=uid)
 
-@st.cache_data(ttl=120)
 def cached_metrics(uid=None):
-    return get_portfolio_metrics(username=uid)
+    return get_portfolio_metrics(user_id=uid)
 
 @st.cache_data(ttl=600)
 def usd_inr_rate()->float:
@@ -291,49 +263,62 @@ def usd_inr_rate()->float:
     return 84.0
 
 def cs(m): return "₹" if m in ("INDIA","INR") else "$"
+
 def sbadge(s):
     c={"Bullish":"b-bull","Bearish":"b-bear"}.get(s,"b-neut")
-    return f'<span class="badge {c}">{s or "—"}</span>'
+    return f'<span class="badge {c}">{html.escape(str(s or "—"))}</span>'
+
 def cbadge(c):
     cl={"High":"b-high","Medium":"b-med","Low":"b-low"}.get(c,"b-low")
-    return f'<span class="badge {cl}">{c or "—"}</span>'
+    return f'<span class="badge {cl}">{html.escape(str(c or "—"))}</span>'
 
+# PRODUCTION FIX: Database-backed Scheduler
 def load_sched():
-    if os.path.exists(SCHED_FILE):
-        with open(SCHED_FILE) as f: return json.load(f)
+    from src.database.models import SystemSettings
+    with Session() as sess:
+        setting = sess.query(SystemSettings).filter(SystemSettings.key == "scheduler_config").first()
+        if setting and setting.value:
+            return setting.value
     return {"enabled":False,"day":"mon","hour":6,"minute":0,"markets":["INDIA","US"],"last_run":None}
+
 def save_sched(cfg):
-    with open(SCHED_FILE,"w") as f: json.dump(cfg,f,indent=2)
+    from src.database.models import SystemSettings
+    with Session() as sess:
+        setting = sess.query(SystemSettings).filter(SystemSettings.key == "scheduler_config").first()
+        if setting:
+            setting.value = cfg
+        else:
+            new_setting = SystemSettings(key="scheduler_config", value=cfg)
+            sess.add(new_setting)
+        sess.commit()
 
 def picks_db(market=None,sector=None,size=None,limit=60):
-    s=Session();q=s.query(Pick)
-    if market: q=q.filter(Pick.market==market)
-    if sector: q=q.filter(Pick.sector==sector)
-    if size:   q=q.filter(Pick.size==size)
-    out=q.order_by(Pick.created_at.desc()).limit(limit).all()
-    s.close(); return out
+    with Session() as s:
+        q = s.query(Pick)
+        if market: q = q.filter(Pick.market==market)
+        if sector: q = q.filter(Pick.sector==sector)
+        if size:   q = q.filter(Pick.size==size)
+        return q.order_by(Pick.created_at.desc()).limit(limit).all()
 
 def sectors_db(mkt):
-    s=Session()
-    r=s.query(Pick.sector).filter(Pick.market==mkt).distinct().all()
-    s.close(); return sorted([x[0] for x in r])
+    with Session() as s:
+        r = s.query(Pick.sector).filter(Pick.market==mkt).distinct().all()
+        return sorted([x[0] for x in r])
 
 def sizes_db(mkt):
-    s=Session()
-    r=s.query(Pick.size).filter(Pick.market==mkt).distinct().all()
-    s.close(); return sorted([x[0] for x in r])
+    with Session() as s:
+        r = s.query(Pick.size).filter(Pick.market==mkt).distinct().all()
+        return sorted([x[0] for x in r])
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# RENDER HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
 def render_ticker(mode="both"):
     if mode in ("both","india"): items,cls=fetch_tape(INDIA_SYMS,"₹"),"india"
     else: items,cls=fetch_tape(US_SYMS,"$"),"us"
     if not items: return
     def chip(it):
         cc="t-up" if it["chg"]>=0 else "t-dn";arr="▲" if it["chg"]>=0 else "▼"
-        return(f'<span class="t-chip"><span class="t-name">{it["sym"]}</span>'
+        sym_safe = html.escape(it["sym"])
+        return(f'<span class="t-chip"><span class="t-name">{sym_safe}</span>'
                f'<span class="t-price">{it["cur"]}{it["p"]:,.2f}</span>'
                f'<span class="{cc}">{arr}{abs(it["chg"]):.2f}%</span></span>')
     inner="".join(chip(i) for i in items)
@@ -358,31 +343,31 @@ def guest_banner():
 
 
 def render_pick_card(p, prefix="", user_tickers:set=None):
-    """
-    Compact pick card. Clicking 'View →' opens the full detail page.
-    """
     cls        = {"Bullish":"bull","Bearish":"bear"}.get(p.sentiment or "","neut")
     cur        = cs(p.currency or p.market)
-    sym        = p.ticker.replace(".NS","").replace(".BO","")
+    
+    sym_safe     = html.escape(p.ticker.replace(".NS","").replace(".BO",""))
+    company_safe = html.escape(p.company[:38]) if p.company else ""
+    sector_safe  = html.escape(p.sector) if p.sector else ""
+    size_safe    = html.escape(p.size) if p.size else ""
+    
     already_in = p.ticker in (user_tickers or set())
-    why_short  = (p.why_buy[0][:70]+"…") 
-    if p.why_buy:
+    
+    why_short  = (p.why_buy[0][:70]+"…") if p.why_buy else f"{p.sentiment or 'Neutral'} signal · {p.sector} · {p.size} Cap"
+    if p.why_buy and len(p.why_buy[0]) > 80:
         raw = p.why_buy[0]
-        if len(raw) > 80:
-            cut = raw[:80].rfind(" ")
-            why_short = raw[:cut] + "…" if cut > 0 else raw[:80] + "…"
-        else:
-            why_short = raw
-    else:
-        why_short: str = f"{p.sentiment or 'Neutral'} signal · {p.sector} · {p.size} Cap"
+        cut = raw[:80].rfind(" ")
+        why_short = raw[:cut] + "…" if cut > 0 else raw[:80] + "…"
+        
+    why_short_safe = html.escape(why_short)
 
     st.markdown(f"""
     <div class="pk">
       <div class="pk-top {cls}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1;min-width:0">
-            <div class="pk-sym">{sym}</div>
-            <div class="pk-co">{p.company[:38]}</div>
+            <div class="pk-sym">{sym_safe}</div>
+            <div class="pk-co">{company_safe}</div>
           </div>
           <div style="text-align:right;flex-shrink:0;margin-left:12px">
             <div class="pk-price">{cur}{p.price_at_pick:,.2f}</div>
@@ -390,13 +375,12 @@ def render_pick_card(p, prefix="", user_tickers:set=None):
           </div>
         </div>
         <div style="margin-top:8px;font-size:11px;color:#475569">
-          {p.sector} &nbsp;·&nbsp; {p.size} Cap &nbsp;·&nbsp; {p.analysis_date}
+          {sector_safe} &nbsp;·&nbsp; {size_safe} Cap &nbsp;·&nbsp; {p.analysis_date}
         </div>
       </div>
-      <div class="pk-bar">💡 {why_short}</div>
+      <div class="pk-bar">💡 {why_short_safe}</div>
     </div>""", unsafe_allow_html=True)
 
-    # Three-column action row: [View →]  [qty input]  [+ Add / ✓]
     c_view, c_qty, c_add = st.columns([2, 1.5, 1.5])
 
     with c_view:
@@ -406,31 +390,30 @@ def render_pick_card(p, prefix="", user_tickers:set=None):
             st.rerun()
 
     if ACCOUNT_TYPE == "guest":
-        with c_add:
-            st.caption("Sign in\nto add")
+        with c_add: st.caption("Sign in\nto add")
     elif already_in:
         with c_add:
-            st.markdown('<div style="text-align:center;padding:6px 0;color:#10b981;font-size:18px">✓</div>',
-                        unsafe_allow_html=True)
+            st.markdown('<div style="text-align:center;padding:6px 0;color:#10b981;font-size:18px">✓</div>', unsafe_allow_html=True)
             st.caption("Added")
     else:
         with c_qty:
-            qty = st.number_input("", 1, 10000, 10, 5,
-                                  key=f"q_{prefix}_{p.id}",
-                                  label_visibility="collapsed")
+            qty = st.number_input("", 1, 10000, 10, 5, key=f"q_{prefix}_{p.id}", label_visibility="collapsed")
         with c_add:
             if st.button("＋ Add", key=f"a_{prefix}_{p.id}", use_container_width=True):
                 try:
-                    add_to_portfolio(p.ticker, qty, user_id=CURRENT_UID,
-                                     username=CURRENT_USER, pick_id=p.id)
-                    st.cache_data.clear(); st.success("Added!"); st.rerun()
+                    add_to_portfolio(p.ticker, qty, user_id=CURRENT_UID, username=CURRENT_USER, pick_id=p.id)
+                    st.success("Added!"); st.rerun() 
                 except Exception as e: st.error(str(e))
-
 
 def render_analysis_card(res:dict):
     action=res.get("action","HOLD")
     label,color,bg=ACTION_STYLE.get(action,ACTION_STYLE["HOLD"])
-    reasons_html="".join(f"<div style='font-size:12px;color:#64748b;margin-top:3px'>• {r}</div>"
+    
+    sym_safe = html.escape(res.get("ticker","").replace(".NS","").replace(".BO",""))
+    conf_safe = html.escape(str(res.get('confidence','')))
+    sum_safe = html.escape(str(res.get('summary','')))
+    
+    reasons_html="".join(f"<div style='font-size:12px;color:#64748b;margin-top:3px'>• {html.escape(r)}</div>"
                          for r in res.get("reasons",[]))
     try:
         sl=res.get("stop_loss");tp=res.get("target_price")
@@ -442,16 +425,15 @@ def render_analysis_card(res:dict):
     if sl_v: levels+=f'<div><span class="ai-level-lbl">Stop </span><span class="ai-level-val" style="color:#ef4444">{sl_v:,.2f}</span></div>'
     if tp_v: levels+=f'<div><span class="ai-level-lbl">Target </span><span class="ai-level-val" style="color:#10b981">{tp_v:,.2f}</span></div>'
 
-    sym=res.get("ticker","").replace(".NS","").replace(".BO","")
     st.markdown(f"""
     <div class="ai-card" style="background:{bg};border:1px solid {color}22">
       <div class="ai-action-pill" style="background:{color}22;color:{color};border:1px solid {color}44">{label}</div>
       <div class="ai-body">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span class="ai-ticker">{sym}</span>
-          <span style="font-size:11px;color:#475569">{res.get('confidence','')} confidence</span>
+          <span class="ai-ticker">{sym_safe}</span>
+          <span style="font-size:11px;color:#475569">{conf_safe} confidence</span>
         </div>
-        <div class="ai-summary">{res.get('summary','')}</div>
+        <div class="ai-summary">{sum_safe}</div>
         {reasons_html}
         {f'<div class="ai-levels">{levels}</div>' if levels else ''}
       </div>
@@ -523,15 +505,27 @@ def render_ptab(market=None,pfx="all"):
         st.caption("Add positions first.")
     else:
         cb,ci=st.columns([1,3])
+        
+        def trigger_analysis():
+            st.session_state.running_analysis = True
+            
         with cb:
-            run_ai=st.button("🤖 Analyse",key=f"run_ai_btn_{pfx}",use_container_width=True)
+            st.button("🤖 Analyse", key=f"run_ai_btn_{pfx}", use_container_width=True, 
+                      on_click=trigger_analysis, disabled=st.session_state.get("running_analysis", False))
         with ci:
             st.markdown('<div style="font-size:12px;color:#475569;padding-top:8px">Claude Haiku · ~5s/stock · Results saved to portfolio</div>',unsafe_allow_html=True)
-        if run_ai:
+        
+        if st.session_state.get("running_analysis", False):
             with st.spinner("Analysing positions..."):
-                from src.agents.portfolio_analyzer import analyze_all_positions
-                st.session_state[f"ai_results_{pfx}"]=analyze_all_positions(market=market,user_id=CURRENT_UID)
-                st.cache_data.clear()
+                try:
+                    from src.agents.portfolio_analyzer import analyze_all_positions
+                    st.session_state[f"ai_results_{pfx}"]=analyze_all_positions(market=market,user_id=CURRENT_UID)
+                except Exception as e:
+                    st.error(f"Analysis Error: {str(e)}")
+                finally:
+                    st.session_state.running_analysis = False
+                    st.rerun()
+                    
         if f"ai_results_{pfx}" in st.session_state:
             results=st.session_state[f"ai_results_{pfx}"]
             if isinstance(results,list) and results:
@@ -561,7 +555,6 @@ def render_ptab(market=None,pfx="all"):
                                      custom_price=new_price if new_price>0 else None,
                                      custom_date=new_date.strip() or None,
                                      notes=new_notes.strip() or None)
-                    st.cache_data.clear()
                     st.success(f"✅ Added {new_ticker.upper()} × {new_qty}");st.rerun()
                 except Exception as e:st.error(f"Error: {e}")
 
@@ -573,23 +566,28 @@ def render_ptab(market=None,pfx="all"):
             s1,s2=st.columns([2,3])
             exit_p=s1.number_input("Exit Price (0=live)",min_value=0.0,value=0.0,step=0.01,format="%.2f")
             sell_n=s2.text_input("Notes",placeholder="e.g. Taking profit")
+            
             if st.form_submit_button("💰 Sell",use_container_width=True) and sel:
-                pid=int(sel.split("·")[0].strip())
-                try:
-                    r=sell_position(pid,notes=sell_n or None,custom_price=exit_p if exit_p>0 else None)
-                    st.cache_data.clear()
-                    for k in [f"ai_results_{pfx}"]:
-                        if k in st.session_state: del st.session_state[k]
-                    em="🟢" if r["pnl_amount"]>=0 else "🔴"
-                    st.success(f"{em} {r['ticker']} sold · P&L: {r['pnl_pct']:+.2f}%");st.rerun()
-                except Exception as e:st.error(str(e))
+                pid = int(sel.split("·")[0].strip())
+                
+                valid_pids = [int(x['id']) for x in h]
+                if pid not in valid_pids:
+                    st.error("Unauthorized action: Position does not belong to your account.")
+                else:
+                    try:
+                        r=sell_position(pid,notes=sell_n or None,custom_price=exit_p if exit_p>0 else None)
+                        for k in [f"ai_results_{pfx}"]:
+                            if k in st.session_state: del st.session_state[k]
+                        em="🟢" if r["pnl_amount"]>=0 else "🔴"
+                        st.success(f"{em} {r['ticker']} sold · P&L: {r['pnl_pct']:+.2f}%");st.rerun()
+                    except Exception as e:st.error(str(e))
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR
-# ═══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     ac,ab=ACCOUNT_COLORS.get(ACCOUNT_TYPE,("#94a3b8","rgba(100,116,139,.12)"))
+    safe_user_initial = html.escape(CURRENT_USER[0].upper()) if CURRENT_USER else "U"
+    safe_user_name = html.escape(CURRENT_USER)
+    
     st.markdown(f"""
     <div style="padding:20px 16px 10px">
       <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px;
@@ -602,10 +600,10 @@ with st.sidebar:
                     background:linear-gradient(135deg,{ac},{ac}66);
                     display:flex;align-items:center;justify-content:center;
                     font-size:14px;font-weight:700;color:#07080f;flex-shrink:0">
-          {CURRENT_USER[0].upper()}
+          {safe_user_initial}
         </div>
         <div>
-          <div style="font-size:13px;font-weight:500;color:#e2e8f0">{CURRENT_USER}</div>
+          <div style="font-size:13px;font-weight:500;color:#e2e8f0">{safe_user_name}</div>
           <div style="font-size:10px;color:{ac};text-transform:uppercase;letter-spacing:.07em;margin-top:1px">{ACCOUNT_TYPE}</div>
         </div>
       </div>
@@ -658,13 +656,19 @@ with st.sidebar:
     </div>""",unsafe_allow_html=True)
 
     ca,cb_=st.columns(2)
+    
+    def trigger_quick_run():
+        if not can_run_analysis():
+            st.error(run_denied_msg())
+        else:
+            st.session_state.quick_run = True
+            
     with ca:
-        if st.button("▶ Run",use_container_width=True,key="sb_run"):
-            if not can_run_analysis():st.error(run_denied_msg())
-            else:st.session_state["quick_run"]=True
+        st.button("▶ Run", use_container_width=True, key="sb_run", 
+                  on_click=trigger_quick_run, disabled=st.session_state.get("running_crew", False))
     with cb_:
         if st.button("↻ Refresh",use_container_width=True,key="sb_ref"):
-            st.cache_data.clear();st.rerun()
+            st.rerun()
     st.markdown("")
     if st.button("⎋ Sign Out",use_container_width=True,key="signout"):
         if ACCOUNT_TYPE!="guest":
@@ -672,36 +676,35 @@ with st.sidebar:
                 from src.auth.supabase_auth import sign_out
                 sign_out()
             except Exception: pass
-        del st.session_state["user"];st.cache_data.clear();st.rerun()
+        del st.session_state["user"];st.rerun()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STOCK DETAIL PAGE — intercepts routing if a stock is selected
-# ═══════════════════════════════════════════════════════════════════════════════
 if st.session_state.get("selected_stock"):
     ticker   = st.session_state.selected_stock
     pick_id  = st.session_state.get("selected_pick_id")
     pick_obj = None
     if pick_id:
-        sess = Session()
-        pick_obj = sess.get(Pick, pick_id)
-        sess.close()
+        with Session() as sess:
+            pick_obj = sess.get(Pick, pick_id)
     render_mbar()
     from src.ui.stock_detail import show_stock_detail
     show_stock_detail(ticker, pick=pick_obj)
-    st.stop()   # ← don't render the normal page
+    st.stop()
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PAGE ROUTING
-# ═══════════════════════════════════════════════════════════════════════════════
-def _run_crew(rm,rs,rz):
+def _run_crew(rm, rs, rz):
+    if not can_run_analysis():
+        st.error(run_denied_msg())
+        return
+
     from src.agents.crew import run_stock_picker
-    res=run_stock_picker(rm,rs,rz,user_id=CURRENT_UID,username=CURRENT_USER)
+    res = run_stock_picker(rm, rs, rz, user_id=CURRENT_UID, username=CURRENT_USER)
+    
     if res.get("picks"):
-        save_picks(res,run_by_user_id=CURRENT_UID);st.cache_data.clear()
+        save_picks(res, run_by_user_id=CURRENT_UID)
         st.success(f"✅ {len(res['picks'])} picks saved!")
-    else:st.warning("No picks passed the quality gate this run.")
+    else:
+        st.warning("No picks passed the quality gate this run.")
 
 
 if page=="Dashboard":
@@ -717,18 +720,37 @@ if page=="Dashboard":
       <div class="mc"><div class="mc-lbl">Win Rate</div><div class="mc-val">{f"{wr}%" if wr else "—"}</div><div class="mc-sub c-mu">{m.get('wins',0)} W / {m.get('losses',0)} L</div></div>
       <div class="mc"><div class="mc-lbl">Positions</div><div class="mc-val">{m.get('open_positions',0)}</div><div class="mc-sub c-mu">{m.get('closed_positions',0)} closed</div></div>
     </div>""",unsafe_allow_html=True)
-    if st.session_state.get("quick_run"):
-        st.session_state.pop("quick_run")
+    
+    if st.session_state.get("quick_run", False):
         st.markdown('<div class="sdiv">Run Analysis</div>',unsafe_allow_html=True)
         from src.data.stock_universe import get_all_sectors,get_all_sizes
         c1,c2,c3=st.columns(3)
         rm=c1.selectbox("Market",["INDIA","US"],key="d_mkt")
         rs=c2.selectbox("Sector",get_all_sectors(rm),key="d_sec")
         rz=c3.selectbox("Size",get_all_sizes(rm),key="d_siz")
-        if st.button("🚀 Launch Crew",type="primary"):
+        
+        def trigger_dash_crew():
+            st.session_state.running_crew = True
+            
+        cb1, cb2 = st.columns([1, 5])
+        with cb1:
+            st.button("🚀 Launch Crew", type="primary", on_click=trigger_dash_crew, disabled=st.session_state.get("running_crew", False))
+        with cb2:
+            if st.button("✖ Cancel", disabled=st.session_state.get("running_crew", False)):
+                st.session_state.quick_run = False
+                st.rerun()
+
+        if st.session_state.get("running_crew", False):
             with st.spinner(f"4 agents: {rm} · {rs} · {rz}  (2-4 min)"):
-                try:_run_crew(rm,rs,rz)
-                except Exception as e:st.error(str(e))
+                try:
+                    _run_crew(rm, rs, rz)
+                except Exception as e:
+                    st.error(f"Execution Error: {str(e)}")
+                finally:
+                    st.session_state.running_crew = False
+                    st.session_state.quick_run = False
+                    st.rerun()
+                
     st.markdown('<div class="sdiv">Recent Picks</div>',unsafe_allow_html=True)
     recent=picks_db(limit=6)
     if recent:
@@ -804,21 +826,27 @@ elif page=="Metrics":
         c1.metric("Total Calls",my["total_calls"])
         c2.metric("Total Cost",f"${my['total_cost']:.4f}")
         c3.metric("Total Tokens",f"{my['total_input']+my['total_output']:,}")
+    
     st.markdown('<div class="sdiv">All Picks History</div>',unsafe_allow_html=True)
-    sess=Session();ap=sess.query(Pick).order_by(Pick.created_at.desc()).all();sess.close()
-    if ap:
-        df=pd.DataFrame([{"Date":p.analysis_date,"Ticker":p.ticker,"Company":p.company[:24],
+    with Session() as sess:
+        ap = sess.query(Pick).order_by(Pick.created_at.desc()).all()
+        ap_data = [{"Date":p.analysis_date,"Ticker":p.ticker,"Company":p.company[:24],
             "Market":p.market,"Sector":p.sector,"Size":p.size,
             "Signal":p.technical_signal,"Sentiment":p.sentiment,"Confidence":p.confidence,
-            "Price":f"{cs(p.currency)}{p.price_at_pick:,.2f}"} for p in ap])
+            "Price":f"{cs(p.currency)}{p.price_at_pick:,.2f}"} for p in ap] if ap else []
+            
+    if ap_data:
+        df=pd.DataFrame(ap_data)
         st.dataframe(df,use_container_width=True,hide_index=True)
-    else:st.info("No picks yet.")
+    else:
+        st.info("No picks yet.")
 
 elif page=="Settings":
     render_mbar()
     st.markdown('<div class="sdiv">Auto-Scheduler</div>',unsafe_allow_html=True)
-    if ACCOUNT_TYPE in ("guest","free"):
-        st.warning("Scheduler requires a Premium or Admin account.")
+    
+    if ACCOUNT_TYPE != "admin":
+        st.warning("Global auto-scheduler configuration is restricted to Admin accounts.")
     else:
         cfg=load_sched()
         from src.data.stock_universe import INDIAN_STOCKS,US_STOCKS,get_all_sectors,get_all_sizes
@@ -837,7 +865,7 @@ elif page=="Settings":
             ind_secs=st.multiselect("India sectors (empty=all)",list(INDIAN_STOCKS.keys()),cfg.get("india_sectors",[]))
             us_secs =st.multiselect("US sectors (empty=all)",list(US_STOCKS.keys()),cfg.get("us_sectors",[]))
             sizes   =st.multiselect("Cap sizes",["Large","Mid","Small","Mega"],cfg.get("sizes",["Large","Mid"]))
-        if st.button("💾 Save",type="primary"):
+        if st.button("💾 Save Global Schedule",type="primary"):
             nc={"enabled":enabled,"day":day,"hour":int(hour),"minute":int(minute),
                 "markets":markets,"india_sectors":ind_secs,"us_sectors":us_secs,
                 "sizes":sizes,"last_run":cfg.get("last_run")}
@@ -859,10 +887,21 @@ elif page=="Settings":
         rm=mc1.selectbox("Market",["INDIA","US"],key="s_mkt")
         rs=mc2.selectbox("Sector",get_all_sectors(rm),key="s_sec")
         rz=mc3.selectbox("Size",get_all_sizes(rm),key="s_siz")
-        if st.button("🚀 Run Now",use_container_width=True):
+        
+        def trigger_manual_crew():
+            st.session_state.running_crew = True
+            
+        st.button("🚀 Run Now", use_container_width=True, on_click=trigger_manual_crew, disabled=st.session_state.get("running_crew", False))
+
+        if st.session_state.get("running_crew", False):
             with st.spinner(f"Agents: {rm} · {rs} · {rz} ..."):
-                try:_run_crew(rm,rs,rz)
-                except Exception as e:st.error(str(e))
+                try:
+                    _run_crew(rm, rs, rz)
+                except Exception as e:
+                    st.error(f"Execution Error: {str(e)}")
+                finally:
+                    st.session_state.running_crew = False
+                    st.rerun()
 
     if ACCOUNT_TYPE!="guest":
         st.markdown('<div class="sdiv">Change Password</div>',unsafe_allow_html=True)
