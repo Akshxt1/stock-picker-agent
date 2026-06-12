@@ -31,11 +31,19 @@ st.markdown("""
 
 html,body,[class*="css"]{font-family:'Outfit',sans-serif;color:#e2e8f0;}
 .stApp{background:#07080f;}
-#MainMenu,footer,header{visibility:hidden;}
+
+/* FIX 1: Keep the header visible so the sidebar toggle works, but hide the default Streamlit menu */
+#MainMenu, footer {visibility:hidden;}
+header[data-testid="stHeader"] {background: transparent !important;}
+
 .block-container{padding:0 2rem 3rem !important;max-width:100% !important;}
 
-/* Sidebar */
-section[data-testid="stSidebar"]>div:first-child{background:#0b0d17 !important;border-right:1px solid rgba(255,255,255,0.05) !important;padding:0 !important;}
+/* FIX 2: Removed "padding: 0 !important" to prevent the option_menu iframe from collapsing */
+section[data-testid="stSidebar"]>div:first-child{
+    background:#0b0d17 !important;
+    border-right:1px solid rgba(255,255,255,0.05) !important;
+}
+
 .nav-link{border-radius:8px !important;margin:2px 8px !important;}
 .nav-link:hover{background:rgba(255,255,255,0.04) !important;}
 .nav-link-selected{background:rgba(99,102,241,0.13) !important;}
@@ -122,24 +130,7 @@ div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1
 /* Guest banner */
 .guest-banner{background:rgba(100,116,139,.08);border:1px solid rgba(100,116,139,.2);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#64748b;margin-bottom:1rem;}
 
-/* Sidebar reopen button — visible indigo pill on left edge */
-[data-testid="collapsedControl"] {
-    background: rgba(99,102,241,0.28) !important;
-    border: 1.5px solid rgba(99,102,241,0.55) !important;
-    border-left: none !important;
-    border-radius: 0 10px 10px 0 !important;
-    min-height: 56px !important;
-    min-width: 26px !important;
-}
-[data-testid="collapsedControl"] svg {
-    fill: #818cf8 !important;
-    color: #818cf8 !important;
-}
-[data-testid="collapsedControl"]:hover {
-    background: rgba(99,102,241,0.45) !important;
-}
-
-/* Sidebar reopen button — visible on left edge when collapsed */
+/* FIX 3: Cleaned up the duplicate collapsedControl CSS block */
 [data-testid="collapsedControl"] {
     display: flex !important;
     visibility: visible !important;
@@ -150,9 +141,14 @@ div[data-testid="stForm"]{background:rgba(255,255,255,0.015) !important;border:1
     border-radius: 0 10px 10px 0 !important;
     min-height: 56px !important;
     min-width: 26px !important;
+    transition: background 0.2s;
 }
 [data-testid="collapsedControl"] svg {
     fill: #818cf8 !important;
+    color: #818cf8 !important;
+}
+[data-testid="collapsedControl"]:hover {
+    background: rgba(99,102,241,0.45) !important;
 }
 
 /* Login */
