@@ -192,6 +192,14 @@ s.close()
 
 ## Deployment
 
+### Oracle Cloud Free Tier (static IP for IIFL)
+
+Use this when you need a stable server IP for IIFL API whitelisting:
+
+```text
+docs/oracle-cloud-deploy.md
+```
+
 ### Keep-alive (free — Streamlit Community Cloud)
 
 1. Deploy on [share.streamlit.io](https://share.streamlit.io) → set main file to `src/ui/app.py`
@@ -219,6 +227,25 @@ For SQLite persistence on Railway: Settings → Add Volume → mount at `/app/sr
 | `SUPABASE_URL` | ✅ | Supabase project URL |
 | `SUPABASE_ANON_KEY` | ✅ | Supabase anonymous/public key |
 | `FINNHUB_API_KEY` | Optional | Improves news and fundamental data |
+| `IIFL_APP_KEY` | Optional | IIFL app key for India market-data provider |
+| `IIFL_APP_SECRET_KEY` | Optional | IIFL app secret; keep server-side only |
+| `TWELVE_DATA_API_KEY` | Optional | Twelve Data fallback for quote/history |
+| `ALPHA_VANTAGE_API_KEY` | Optional | Alpha Vantage fallback for quote/history |
+
+### Market Data Provider Order
+
+The app now routes quote, history, and fundamentals requests through a provider layer with SQLite caching. Override provider order with comma-separated environment variables:
+
+```env
+INDIA_QUOTE_PROVIDER_ORDER=iifl,yfinance,twelvedata,alphavantage
+INDIA_HISTORY_PROVIDER_ORDER=iifl,yfinance,twelvedata,alphavantage
+INDIA_FUNDAMENTALS_PROVIDER_ORDER=yfinance,alphavantage
+US_QUOTE_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
+US_HISTORY_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
+US_FUNDAMENTALS_PROVIDER_ORDER=yfinance,alphavantage
+```
+
+IIFL credentials can be stored now, but the IIFL provider remains disabled for data calls until its exact auth and market-data endpoints are mapped from the developer docs.
 
 ---
 

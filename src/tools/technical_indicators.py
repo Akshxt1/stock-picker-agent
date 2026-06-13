@@ -11,10 +11,11 @@
 #   EMA     — what is the short vs long-term trend direction?
 #   ATR     — how volatile is this stock right now?
 
-import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 from crewai.tools import tool
+
+from src.providers import market_data_client
 
 
 # ─── Helper: human-readable signal interpretation ──────────────────────────
@@ -77,8 +78,7 @@ def get_technical_indicators(ticker: str) -> dict:
       - US stocks:  AAPL, MSFT, TSLA
     """
     try:
-        stock   = yf.Ticker(ticker)
-        history = stock.history(period="6mo")   # 6 months for reliable indicator calc
+        history = market_data_client().history(ticker, period="6mo").data
 
         if history.empty or len(history) < 30:
             return {"error": f"Not enough price history for {ticker} to calculate indicators."}

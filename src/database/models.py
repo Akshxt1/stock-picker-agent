@@ -125,6 +125,16 @@ class SystemSettings(Base):
     value = Column(JSON)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+class MarketDataCache(Base):
+    """Cached provider responses to reduce repeated market-data API calls"""
+    __tablename__ = "market_data_cache"
+
+    cache_key = Column(String, primary_key=True)
+    source = Column(String)
+    payload = Column(JSON)
+    expires_at = Column(DateTime)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
 class UserProfile(Base):
     """Local mirror of user profile data synced from Supabase auth"""
     __tablename__ = "user_profiles"

@@ -17,6 +17,7 @@ dependencies = [
     "plotly>=6.8.0",
     "python-dotenv>=1.2.2",
     "pytz>=2026.2",
+    "requests>=2.32.0",
     "schedule>=1.2.2",
     "sqlalchemy>=2.0.49",
     "streamlit>=1.57.0",

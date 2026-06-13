@@ -11,8 +11,8 @@
 from crewai.tools import tool
 import yfinance as yf
 import pandas as pd
-import requests
-import json
+
+from src.providers import market_data_client
 
 # ── Sector → ETF mapping for US market (holdings = relevant stocks) ──────────
 US_SECTOR_ETFS = {
@@ -147,6 +147,20 @@ US_SECTOR_SEEDS = {
 }
 
 
+def _get_sector_seeds(market: str, sector: str) -> list:
+    """Return sector seed tickers, allowing minor case/spacing differences."""
+    seed_map = INDIA_SECTOR_SEEDS if market.upper() == "INDIA" else US_SECTOR_SEEDS
+    if sector in seed_map:
+        return seed_map[sector]
+
+    normalized = sector.strip().lower()
+    for sector_name, tickers in seed_map.items():
+        if sector_name.lower() == normalized:
+            return tickers
+
+    return []
+
+
 @tool("Discover Stocks")
 def discover_stocks(market: str, sector: str, size: str) -> str:
     """
@@ -182,7 +196,7 @@ def discover_stocks(market: str, sector: str, size: str) -> str:
 
     # ── Step 2: Use seed lists filtered by size ───────────────────────────────
     if not tickers:
-        seeds = (INDIA_SECTOR_SEEDS if market == "INDIA" else US_SECTOR_SEEDS).get(sector, [])
+        seeds = _get_sector_seeds(market, sector)
 
         if seeds:
             # Filter by size using market cap thresholds
@@ -247,31 +261,54 @@ def get_market_movers(market: str, sector: str) -> str:
         market: "INDIA" or "US"
         sector: sector name, e.g. "Technology", "Banking"
     """
-    seeds = (INDIA_SECTOR_SEEDS if market.upper() == "INDIA"
-             else US_SECTOR_SEEDS).get(sector, [])
+    market = market.upper()
+    seeds = _get_sector_seeds(market, sector)
 
     if not seeds:
         return f"No seed stocks available for {market} / {sector}."
 
     results = []
-    for ticker in seeds[:20]:  # check first 20 seeds
-        try:
-            info = yf.Ticker(ticker).fast_info
-            change = getattr(info, "three_month_change", None)
-            price  = getattr(info, "last_price", None)
-            mcap   = getattr(info, "market_cap", None)
-            if price and change is not None:
-                results.append({
-                    "ticker": ticker,
-                    "price":  round(price, 2),
-                    "3m_chg": round(change * 100, 2),
-                    "mcap":   mcap,
-                })
-        except Exception:
-            continue
+    tickers = seeds[:20]
+
+    try:
+        data = yf.download(
+            tickers=" ".join(tickers),
+            period="3mo",
+            group_by="ticker",
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+            timeout=15,
+        )
+
+        for ticker in tickers:
+            try:
+                hist = data[ticker] if len(tickers) > 1 else data
+                mover = _build_mover_row(ticker, hist)
+                if mover:
+                    results.append(mover)
+            except Exception:
+                continue
+    except Exception:
+        pass
 
     if not results:
-        return f"Could not retrieve mover data for {market} / {sector}."
+        client = market_data_client()
+        for ticker in tickers:
+            try:
+                hist = client.history(ticker, period="3mo").data
+                mover = _build_mover_row(ticker, hist)
+                if mover:
+                    results.append(mover)
+            except Exception:
+                continue
+
+    if not results:
+        fallback = ", ".join(seeds[:10])
+        return (
+            f"Live mover data unavailable for {market} / {sector}. "
+            f"Using sector seed watchlist as momentum candidates:\n{fallback}"
+        )
 
     # Sort by 3-month performance
     results.sort(key=lambda x: x["3m_chg"], reverse=True)
@@ -279,6 +316,28 @@ def get_market_movers(market: str, sector: str) -> str:
     lines = [f"Top movers in {market} / {sector}:"]
     for r in results[:10]:
         lines.append(
-            f"  {r['ticker']:20} price={r['price']:>10}  3m={r['3m_chg']:>+7.2f}%"
+            f"  {r['ticker']:20} price={r['price']:>10}  3m={r['3m_chg']:>+7.2f}%  vol={r['vol']}x"
         )
     return "\n".join(lines)
+
+
+def _build_mover_row(ticker: str, hist: pd.DataFrame) -> dict | None:
+    if hist is None or hist.empty or len(hist) < 2:
+        return None
+
+    price_now = hist["Close"].dropna().iloc[-1]
+    price_start = hist["Close"].dropna().iloc[0]
+    if price_start == 0:
+        return None
+
+    chg_3m = ((price_now - price_start) / price_start) * 100
+    avg_vol = hist["Volume"].mean()
+    last_vol = hist["Volume"].iloc[-1]
+    vol_ratio = round(last_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+
+    return {
+        "ticker": ticker,
+        "price": round(float(price_now), 2),
+        "3m_chg": round(float(chg_3m), 2),
+        "vol": vol_ratio,
+    }

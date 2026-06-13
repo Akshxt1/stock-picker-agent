@@ -1,0 +1,16 @@
+[Unit]
+Description=StockPicker Streamlit app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/stock-picker-agent
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ubuntu/.local/bin/uv run streamlit run src/ui/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

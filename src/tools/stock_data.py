@@ -3,7 +3,8 @@
 #        to match the rest of the project and avoid silent CrewAI tool failures.
 
 from crewai.tools import tool
-import yfinance as yf
+
+from src.providers import market_data_client
 
 
 @tool("Get Stock Data")
@@ -13,9 +14,8 @@ def get_stock_data(ticker: str) -> str:
     Use this tool when you need basic pricing, volume, and company information.
     """
     try:
-        stock = yf.Ticker(ticker)
-
-        info = stock.info
+        client = market_data_client()
+        info = client.fundamentals(ticker).data
         if not info:
             return f"No fundamental data found for {ticker}."
 
@@ -32,7 +32,7 @@ def get_stock_data(ticker: str) -> str:
         high_52    = info.get("fiftyTwoWeekHigh", "N/A")
         low_52     = info.get("fiftyTwoWeekLow", "N/A")
 
-        hist = stock.history(period="1mo", auto_adjust=False)
+        hist = client.history(ticker, period="1mo").data
         if hist.empty:
             prices = "No recent price history available."
         else:
@@ -75,26 +75,14 @@ def get_batch_stock_data(tickers: str) -> str:
         if not ticker_list:
             return "No valid tickers provided."
 
-        data = yf.download(
-            tickers=" ".join(ticker_list),
-            period="1d",
-            group_by="ticker",
-            auto_adjust=False,
-            timeout=10,
-            progress=False,
-        )
-
         results = []
-        if len(ticker_list) == 1:
-            t = ticker_list[0]
-            if not data.empty and "Close" in data:
-                val = data["Close"].iloc[-1]
-                results.append(f"{t}: {val:.2f}")
-        else:
-            for t in ticker_list:
-                if t in data and not data[t].empty and "Close" in data[t]:
-                    val = data[t]["Close"].iloc[-1]
-                    results.append(f"{t}: {val:.2f}")
+        client = market_data_client()
+        for t in ticker_list:
+            try:
+                quote = client.quote(t).data
+                results.append(f"{t}: {float(quote['price']):.2f}")
+            except Exception:
+                continue
 
         return " | ".join(results) if results else "Could not retrieve batch prices."
 
