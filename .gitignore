@@ -28,6 +28,7 @@ check_portfolio.py
 run_test.py
 check_imports.py
 test_tools.py
+fix_db.py
 
 # OS files
 .DS_Store

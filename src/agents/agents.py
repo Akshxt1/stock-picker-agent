@@ -15,17 +15,16 @@ load_dotenv()
 # PRODUCTION FIX: Using valid Anthropic routing strings for Claude 3.5
 
 llm_haiku = LLM(
-    model="anthropic/claude-3-5-haiku-latest",
+    model="anthropic/claude-haiku-4-5-20251001",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
     temperature=0.3,
 )
 
 llm_sonnet = LLM(
-    model="anthropic/claude-3-5-sonnet-latest",
+    model="anthropic/claude-sonnet-4-6",
     api_key=os.getenv("ANTHROPIC_API_KEY"),
     temperature=0.2,
 )
-
 
 # ─── Agent 1: Researcher ────────────────────────────────────────────────────
 def create_researcher() -> Agent:

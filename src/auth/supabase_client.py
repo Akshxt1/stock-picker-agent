@@ -14,7 +14,7 @@ load_dotenv(dotenv_path=env_path)
 
 def get_client() -> Client:
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
+    key = os.environ.get("SUPABASE_ANON_KEY")
     
     if not url or not key:
         # If this triggers, your .env file is either missing or empty

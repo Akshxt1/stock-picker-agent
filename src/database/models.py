@@ -125,6 +125,17 @@ class SystemSettings(Base):
     value = Column(JSON)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+class UserProfile(Base):
+    """Local mirror of user profile data synced from Supabase auth"""
+    __tablename__ = "user_profiles"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, unique=True, nullable=False)   # Supabase auth UUID
+    username = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    account_type = Column(String, default="free")           # 'free', 'pro', 'admin'
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_seen = Column(DateTime, nullable=True)
 
 # ─── Initialization ───────────────────────────────────────────────────────────
 

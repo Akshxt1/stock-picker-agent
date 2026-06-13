@@ -397,7 +397,7 @@ def render_pick_card(p, prefix="", user_tickers:set=None):
             st.caption("Added")
     else:
         with c_qty:
-            qty = st.number_input("", 1, 10000, 10, 5, key=f"q_{prefix}_{p.id}", label_visibility="collapsed")
+            qty = st.number_input("Quantity", 1, 10000, 10, 5, key=f"q_{prefix}_{p.id}", label_visibility="collapsed")
         with c_add:
             if st.button("＋ Add", key=f"a_{prefix}_{p.id}", use_container_width=True):
                 try:

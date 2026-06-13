@@ -17,10 +17,10 @@ def show_admin_page():
         "👥 Users", "💰 API Costs", "📋 All Activity", "⚙️ Manage Users"
     ])
 
-    with tab_users:   _render_users_tab()
-    with tab_usage:   _render_usage_tab()
-    with tab_activity:_render_activity_tab()
-    with tab_manage:  _render_manage_tab()
+    with tab_users:    _render_users_tab()
+    with tab_usage:    _render_usage_tab()
+    with tab_activity: _render_activity_tab()
+    with tab_manage:   _render_manage_tab()
 
 
 # ── Tab 1: Users overview ─────────────────────────────────────────────────────
@@ -30,12 +30,11 @@ def _render_users_tab():
     users   = session.query(UserProfile).order_by(UserProfile.created_at.desc()).all()
     session.close()
 
-    total     = len(users)
-    admins    = sum(1 for u in users if u.account_type == "admin")
-    premiums  = sum(1 for u in users if u.account_type == "premium")
-    frees     = sum(1 for u in users if u.account_type == "free")
+    total    = len(users)
+    admins   = sum(1 for u in users if u.account_type == "admin")
+    premiums = sum(1 for u in users if u.account_type == "premium")
+    frees    = sum(1 for u in users if u.account_type == "free")
 
-    # Metric strip
     st.markdown(f"""
     <div class="metric-strip">
       <div class="mc"><div class="mc-lbl">Total Users</div>
@@ -50,11 +49,11 @@ def _render_users_tab():
 
     if users:
         df = pd.DataFrame([{
-            "Name":         u.name,
-            "Email":        u.email,
-            "Account":      u.account_type.title(),
-            "Active":       "✓" if u.is_active else "✗",
-            "Joined":       u.created_at.strftime("%d %b %Y"),
+            "Name":    u.username or "—",
+            "Email":   u.email    or "—",
+            "Account": (u.account_type or "free").title(),
+            "Joined":  u.created_at.strftime("%d %b %Y") if u.created_at else "—",
+            "Last Seen": u.last_seen.strftime("%d %b %Y") if u.last_seen else "—",
         } for u in users])
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
@@ -92,7 +91,7 @@ def _render_usage_tab():
         for uname, s in sorted(by_user.items(), key=lambda x: x[1]["cost"], reverse=True):
             rows.append({
                 "User":         uname,
-                "Account":      s.get("account_type","—").title(),
+                "Account":      s.get("account_type", "—").title(),
                 "API Calls":    s["calls"],
                 "Total Tokens": f"{s['tokens']:,}",
                 "Cost (USD)":   f"${s['cost']:.4f}",
@@ -113,7 +112,7 @@ def _render_usage_tab():
 # ── Tab 3: All portfolio activity ─────────────────────────────────────────────
 
 def _render_activity_tab():
-    session  = Session()
+    session   = Session()
     positions = session.query(Portfolio).order_by(Portfolio.entry_date.desc()).limit(100).all()
     picks_all = session.query(Pick).order_by(Pick.created_at.desc()).limit(50).all()
     session.close()
@@ -123,13 +122,13 @@ def _render_activity_tab():
         rows = []
         for p in positions:
             rows.append({
-                "User":     p.username or "—",
-                "Ticker":   p.ticker,
-                "Market":   p.market,
-                "Qty":      int(p.quantity),
-                "Entry":    f"{p.entry_price:,.2f}",
-                "Status":   "Open" if p.is_open else "Closed",
-                "Date":     p.entry_date.strftime("%d %b %Y"),
+                "User":   p.username or "—",
+                "Ticker": p.ticker,
+                "Market": p.market,
+                "Qty":    int(p.quantity),
+                "Entry":  f"{p.entry_price:,.2f}",
+                "Status": "Open" if p.is_open else "Closed",
+                "Date":   p.entry_date.strftime("%d %b %Y") if p.entry_date else "—",
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
@@ -156,17 +155,17 @@ def _render_activity_tab():
 # ── Tab 4: Manage users ───────────────────────────────────────────────────────
 
 def _render_manage_tab():
-    st.markdown("Change a user's account type or deactivate their account.")
+    st.markdown("Change a user's account type.")
 
     session = Session()
-    users   = session.query(UserProfile).order_by(UserProfile.name).all()
+    users   = session.query(UserProfile).order_by(UserProfile.username).all()
     session.close()
 
     if not users:
         st.info("No users to manage.")
         return
 
-    opts      = [f"{u.name} ({u.email})" for u in users]
+    opts      = [f"{u.username or 'Unknown'} ({u.email or '—'})" for u in users]
     selection = st.selectbox("Select user", opts, label_visibility="collapsed")
     sel_user  = users[opts.index(selection)] if selection else None
 
@@ -174,25 +173,23 @@ def _render_manage_tab():
         st.markdown(f"""
         <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);
                     border-radius:10px;padding:14px 16px;margin-bottom:14px">
-          <span style="color:#e2e8f0;font-weight:500">{sel_user.name}</span>
+          <span style="color:#e2e8f0;font-weight:500">{sel_user.username or 'Unknown'}</span>
           &nbsp;·&nbsp;
-          <span style="color:#64748b;font-size:13px">{sel_user.email}</span>
+          <span style="color:#64748b;font-size:13px">{sel_user.email or '—'}</span>
           &nbsp;·&nbsp;
-          <span style="color:#818cf8;font-size:12px">{sel_user.account_type}</span>
+          <span style="color:#818cf8;font-size:12px">{sel_user.account_type or 'free'}</span>
         </div>""", unsafe_allow_html=True)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            new_type = st.selectbox(
-                "Change account type",
-                ["admin","premium","free"],
-                index=["admin","premium","free"].index(
-                    sel_user.account_type if sel_user.account_type in ["admin","premium","free"] else "free"
-                ),
-                key="man_type"
-            )
-        with col2:
-            new_active = st.toggle("Account active", value=sel_user.is_active, key="man_active")
+        new_type = st.selectbox(
+            "Change account type",
+            ["admin", "premium", "free"],
+            index=["admin", "premium", "free"].index(
+                sel_user.account_type
+                if sel_user.account_type in ["admin", "premium", "free"]
+                else "free"
+            ),
+            key="man_type",
+        )
 
         if st.button("💾 Save Changes", type="primary"):
             session = Session()
@@ -200,10 +197,8 @@ def _render_manage_tab():
                 user = session.query(UserProfile).filter_by(user_id=sel_user.user_id).first()
                 if user:
                     user.account_type = new_type
-                    user.is_active    = new_active
                     session.commit()
-                    st.success(f"✅ {sel_user.name} updated → {new_type}"
-                               + (" (active)" if new_active else " (deactivated)"))
+                    st.success(f"✅ {sel_user.username or sel_user.email} → {new_type}")
                     st.rerun()
             except Exception as e:
                 st.error(str(e))
