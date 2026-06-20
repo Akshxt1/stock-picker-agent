@@ -30,6 +30,19 @@ check_imports.py
 test_tools.py
 fix_db.py
 
+# Node / Next.js frontend
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+
+# Logs directory
+logs/
+
+# Provider data caches (regenerated at runtime)
+src/providers/_iifl_scripmaster.csv
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -1,32 +1,28 @@
-# ◈ StockPicker Terminal
+# ◈ The Great Ponzi — AI Stock Picker
 
-> AI-powered investment research and paper trading platform for Indian (NSE/BSE) and US (NYSE/NASDAQ) markets.
+> AI-powered investment research and paper-trading platform for Indian (NSE/BSE) and US (NYSE/NASDAQ) markets.
+> **FastAPI** backend + **Next.js** frontend, driven by a 4-agent **CrewAI** pipeline on **Claude**.
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue?style=flat-square&logo=python)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.57+-red?style=flat-square&logo=streamlit)
+![Python](https://img.shields.io/badge/Python-3.13+-blue?style=flat-square&logo=python)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi)
+![Next.js](https://img.shields.io/badge/Next.js-14-black?style=flat-square&logo=nextdotjs)
 ![CrewAI](https://img.shields.io/badge/CrewAI-Multi--Agent-purple?style=flat-square)
 ![Claude](https://img.shields.io/badge/Claude-Haiku%20%7C%20Sonnet-orange?style=flat-square)
-![Supabase](https://img.shields.io/badge/Supabase-Auth-green?style=flat-square&logo=supabase)
+![Supabase](https://img.shields.io/badge/Supabase-Auth-3ECF8E?style=flat-square&logo=supabase)
 
 ---
 
 ## What It Does
 
-StockPicker Terminal runs a team of 4 AI agents that research, analyse, and score stocks across Indian and US markets. It then lets you track picks and simulate trades in a paper portfolio — all from a single dark-themed web app.
+A team of 4 AI agents researches, analyses, and scores stocks across Indian and US markets, then lets you track picks and run a paper portfolio — all from a dark-themed Next.js web app talking to a FastAPI backend.
 
-**4-Agent Pipeline**
-1. **Researcher** — collects fundamentals, price data, 52-week range, news
-2. **Technical Analyst** — calculates RSI, MACD, Bollinger Bands, EMA, ATR
+### The 4-Agent Pipeline
+1. **Researcher** — discovers tickers and collects fundamentals, price/momentum, 52-week range, and news
+2. **Data Analyst** — computes RSI, MACD, Bollinger Bands, EMA 20/50, ATR and a technical score
 3. **Sentiment Analyst** — scores news sentiment, flags red flags and catalysts
-4. **Master Analyst** — applies a strict quality gate and outputs only Medium/High confidence Bullish picks as JSON
+4. **Master Analyst (CEO)** — applies a strict quality gate and emits only Medium/High-confidence picks as JSON, each with a `why_buy` / `why_not_buy` brief
 
-**Quality Gate** — picks are automatically rejected if:
-- RSI > 75 (overbought) or < 25 (freefall)
-- Triple bearish signal (EMA + MACD + RSI all down)
-- Debt-to-Equity > 3
-- Negative revenue growth
-- Active legal/regulatory issues
-- Low confidence → never recommended
+**Quality gate** auto-rejects: RSI > 75 or < 25 · triple-bearish (EMA + MACD + RSI down) · Debt/Equity > 3 · negative revenue growth · active legal/regulatory issues · low confidence.
 
 ---
 
@@ -34,31 +30,32 @@ StockPicker Terminal runs a team of 4 AI agents that research, analyse, and scor
 
 | Feature | Details |
 |---|---|
-| 🤖 AI Analysis | 4-agent CrewAI pipeline powered by Claude |
-| 📊 Stock Detail | Price chart, Technicals tab, News tab, Events tab |
-| 💼 Paper Trading | Add/sell positions with live P&L, custom entry price |
-| 🔐 Auth | Supabase email login, account types (Admin/Premium/Free/Guest) |
-| 👥 Multi-user | Each user sees only their own portfolio |
-| 🛡 Admin Dashboard | User management, API cost tracking, all activity |
-| 📅 Auto-Scheduler | Weekly crew runs on a configurable day/time |
-| 📈 Live Ticker | Animated stock ticker tape (India/US) |
-| 🌐 Market Status | Real-time NSE/BSE and NYSE/NASDAQ open/close indicator |
+| 🤖 AI Stock Picker | 4-agent CrewAI pipeline, streamed live to the UI via SSE |
+| 🔬 Deep Analysis | Run the full crew on a single stock on demand (counts toward your quota) |
+| 📈 Live Dashboard | Live NIFTY / SENSEX / S&P 500 / NASDAQ index cards, market-aware Top Movers & News (IND / US / Both) |
+| 📊 Stock Detail | Price chart + AI Analysis · Technicals · News · Events tabs (Groww/INDmoney-style) |
+| 💼 Portfolio | Hero summary (value / invested / returns), per-holding live P&L & analysis, IND/US/All tabs, live ₹⇄$ FX toggle |
+| 🌍 Market Scoping | India runs stay on the India page, US on the US page — no cross-leak |
+| 🔐 Auth & Isolation | Supabase JWT login; each user sees only their own picks & portfolio |
+| 🧾 Run Attribution + Dedup | Picks tagged with who ran them; same-combo same-day runs replace rather than duplicate |
+| 🛡 Admin Dashboard | User management, per-user API cost tracking, run log (admin-only) |
+| 🔢 Account Quotas | Weekly crew-run and deep-analysis limits per account type |
 
 ---
 
 ## Tech Stack
 
 ```
-Frontend     Streamlit + custom CSS (dark terminal UI)
-AI Agents    CrewAI + Anthropic Claude (Haiku for analysis, Sonnet for complex tasks)
-Data         yfinance (prices, fundamentals, news, events)
+Frontend     Next.js 14 (App Router) · React · Tailwind · Radix UI · Recharts
+Backend      FastAPI · Uvicorn · Server-Sent Events (live agent stream)
+AI Agents    CrewAI + Anthropic Claude (Haiku for analysis, Sonnet for the CEO decision)
+Market Data  Finnhub (US) · yfinance (India + fallback) · TwelveData / Alpha Vantage (fallback)
              pandas-ta (technical indicators)
-             Finnhub (supplementary data)
-Auth         Supabase (email/password, JWT sessions)
-Database     SQLite (local) via SQLAlchemy
-Scheduler    APScheduler (background weekly runs)
-Charts       Plotly (interactive price charts)
+Auth         Supabase (email/password, JWT)
+Database     SQLite (local) / Supabase Postgres (prod) via SQLAlchemy, with a market-data cache
 ```
+
+Market data flows through a cached multi-provider layer (`src/providers/market_data.py`): **US → Finnhub → yfinance**, **India → yfinance → TwelveData → Alpha Vantage**. (IIFL's legacy API was decommissioned and removed from the chain.)
 
 ---
 
@@ -67,32 +64,28 @@ Charts       Plotly (interactive price charts)
 ```
 stock-picker-agent/
 ├── src/
+│   ├── api/                     # FastAPI backend
+│   │   ├── main.py              # app + router registration
+│   │   └── routes/
+│   │       ├── auth.py          # Supabase login / current-user dependency
+│   │       ├── crew.py          # SSE: market-scan + single-stock deep analysis
+│   │       ├── stock.py         # quote / history / technicals / news / events / ai
+│   │       ├── portfolio.py     # holdings + per-holding & whole-portfolio analysis
+│   │       ├── market.py        # status / indices / movers / news / fx
+│   │       ├── picks.py         # saved picks (per user)
+│   │       ├── universe.py      # sectors & sizes
+│   │       └── admin.py         # admin-only: users, usage, runs, logs
 │   ├── agents/
-│   │   ├── agents.py              # 4 CrewAI agent definitions
-│   │   ├── tasks.py               # Task prompts with strict quality gate
-│   │   ├── crew.py                # Orchestrator + API cost logging
-│   │   └── portfolio_analyzer.py  # Per-position AI analysis
-│   ├── tools/
-│   │   ├── stock_data.py          # yfinance fundamentals
-│   │   ├── news_sentiment.py      # News + sentiment scoring
-│   │   └── technical_indicators.py # RSI, MACD, BB, EMA, ATR
-│   ├── data/
-│   │   └── stock_universe.py      # ~200 tickers, India+US, by sector/size
-│   ├── database/
-│   │   ├── models.py              # SQLite schema (UserProfile, Pick, Portfolio, etc.)
-│   │   └── paper_trading.py       # Portfolio CRUD with user isolation
-│   ├── auth/
-│   │   └── supabase_auth.py       # Supabase sign-up, sign-in, guest
-│   ├── ui/
-│   │   ├── app.py                 # Main Streamlit app
-│   │   ├── login_page.py          # Login / Register / Guest UI
-│   │   ├── admin_page.py          # Admin dashboard
-│   │   └── stock_detail.py        # Groww-style stock detail page
-│   └── scheduler.py               # APScheduler background jobs
-├── .env                           # API keys (not committed)
-├── scheduler_settings.json        # Auto-scheduler config (not committed)
-├── railway.toml                   # Railway deployment config
-├── Procfile                       # Alternative deployment
+│   │   ├── agents.py            # 4 CrewAI agent definitions
+│   │   ├── tasks.py             # market-scan + single-stock task pipelines
+│   │   └── crew.py              # orchestrator + JSON extraction + cost logging
+│   ├── tools/                   # CrewAI tools: stock data, news, technicals, discovery
+│   ├── providers/               # cached multi-provider market-data layer
+│   ├── data/stock_universe.py   # sectors / cap-size buckets
+│   └── database/                # SQLAlchemy models + paper-trading logic
+├── frontend/                    # Next.js app (app/, components/, lib/)
+├── railway.toml                 # Railway deploy (runs the FastAPI app)
+├── run_api.ps1                  # local dev: uvicorn with --reload-dir src
 └── pyproject.toml
 ```
 
@@ -100,122 +93,103 @@ stock-picker-agent/
 
 ## Quickstart
 
-### 1. Clone & install
+### 1. Backend
 
 ```bash
 git clone https://github.com/Akshxt1/stock-picker-agent.git
 cd stock-picker-agent
-uv sync
+uv sync                       # install Python deps from uv.lock
 ```
 
-Or with pip:
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Set up environment
-
-Create a `.env` file in the project root:
+Create a `.env` in the project root (see `.env.example`):
 
 ```env
-# Anthropic (required)
 ANTHROPIC_API_KEY=sk-ant-...
-
-# Supabase (required for auth)
 SUPABASE_URL=https://yourproject.supabase.co
 SUPABASE_ANON_KEY=eyJ...
-
-# Finnhub (optional, improves data quality)
-FINNHUB_API_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...      # admin user management
+FINNHUB_API_KEY=...                   # US quotes/fundamentals/news
+# optional fallbacks
+TWELVE_DATA_API_KEY=...
+ALPHA_VANTAGE_API_KEY=...
 ```
+
+Run the API (Windows PowerShell helper keeps reloads scoped to `src/`):
+
+```powershell
+./run_api.ps1
+```
+
+Or directly:
+
+```bash
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir src
+```
+
+> ⚠️ Always use `--reload-dir src`. Plain `--reload` also watches `frontend/.next/`, which the Next.js dev server rewrites constantly — that thrashes the reloader and serves stale routes.
+
+API runs at `http://localhost:8000` (`/docs` for the OpenAPI UI).
+
+### 2. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+App opens at `http://localhost:3000`. It expects the API at `http://localhost:8000` (override via `NEXT_PUBLIC_API_URL`).
 
 ### 3. Supabase setup (5 minutes)
 
 1. Create a free project at [supabase.com](https://supabase.com)
-2. Copy **Project URL** and **anon public key** from Settings → API
-3. Go to **Authentication → Providers** → make sure **Email** is enabled
-4. Optional: disable "Confirm email" under Authentication → Settings for local testing
+2. Copy **Project URL**, **anon public key**, and **service_role key** from Settings → API
+3. Authentication → Providers → enable **Email**
+4. (Local testing) Authentication → Settings → optionally disable "Confirm email"
 
-### 4. Run
-
-```bash
-uv run streamlit run src/ui/app.py
-```
-
-App opens at `http://localhost:8501`
-
-### 5. Make yourself Admin (first run)
-
-After signing up, run this once:
-
-```bash
-uv run python make_admin.py
-```
-
-Or replace `YOUR_EMAIL` and run:
-
-```python
-# make_admin.py
-from src.database.models import init_db, Session, UserProfile
-init_db()
-s = Session()
-user = s.query(UserProfile).filter(UserProfile.email == "YOUR_EMAIL").first()
-if user:
-    user.account_type = "admin"
-    s.commit()
-    print(f"✅ {user.name} is now Admin")
-s.close()
-```
+The admin account is bootstrapped by email (`akshatgupta428@gmail.com`); change `ADMIN_EMAIL` in `src/api/routes/auth.py` and `admin.py` to your own.
 
 ---
 
-## Account Types
+## Account Types & Limits
 
-| Type | Analysis Runs | Portfolio | Admin Dashboard | Scheduler |
-|---|---|---|---|---|
-| **Admin** | Unlimited | Own only | ✓ Full access | ✓ |
-| **Premium** | Unlimited | Own only | ✗ | ✓ |
-| **Free** | 3 / week | Own only | ✗ | ✗ |
-| **Guest** | None (read-only) | ✗ | ✗ | ✗ |
+| Type | Crew Runs / week | Deep + Portfolio Analyses / week | Admin Dashboard |
+|---|---|---|---|
+| **Admin** | Unlimited | Unlimited | ✓ |
+| **Premium** | 5 | 5 | ✗ |
+| **Trial** | 2 | 3 | ✗ |
+| **Guest** | None (read-only) | None | ✗ |
+
+- **Crew run** = a market scan (Researcher → … → CEO across a sector/size).
+- **Deep/portfolio analysis** = full-crew analysis of one stock, or an "Analyze Portfolio" sweep. Both draw from the same weekly quota. The quick per-holding verdict is free.
 
 ---
 
 ## Running an Analysis
 
-1. Click **▶ Run** in the sidebar
-2. Select Market (India / US), Sector, and Cap Size
-3. Click **🚀 Launch Crew**
-4. Wait 2–4 minutes while 4 agents work in sequence
-5. Results appear under Recent Picks — only stocks that pass all quality gates
+1. Go to **IND Market** or **US Market** (or the Dashboard picker)
+2. Pick a Sector and Cap Size, hit **Run Analysis**
+3. Watch the 4 agents work live in the activity timeline
+4. Passing stocks render as clickable cards → open one for chart, technicals, news, events, and the AI brief
+5. On any stock page, hit **Run Deep Analysis** to run the full crew on just that ticker
 
 ---
 
-## Deployment
+## Key API Endpoints
 
-### Oracle Cloud Free Tier (static IP for IIFL)
-
-Use this when you need a stable server IP for IIFL API whitelisting:
-
-```text
-docs/oracle-cloud-deploy.md
+```
+GET  /api/crew/stream?market=&sector=&size=     # SSE market scan
+GET  /api/crew/stock-stream?ticker=             # SSE single-stock deep analysis
+GET  /api/stock/{ticker}/quote|history|technicals|news|events|ai
+GET  /api/market/status|indices|movers|news|fx
+GET  /api/picks?market=                         # current user's saved picks
+GET  /api/portfolio?market=                     # holdings w/ live price + P&L
+POST /api/portfolio/{id}/analyze                # quick per-holding verdict
+POST /api/portfolio/analyze-all                 # analyze whole portfolio (1 quota run)
+GET  /api/admin/users|usage|runs|logs           # admin only
 ```
 
-### Keep-alive (free — Streamlit Community Cloud)
-
-1. Deploy on [share.streamlit.io](https://share.streamlit.io) → set main file to `src/ui/app.py`
-2. Add secrets in the Streamlit dashboard (same keys as `.env`)
-3. Sign up at [uptimerobot.com](https://uptimerobot.com) → add your app URL with a 5-minute ping interval
-
-### Always-on (Railway ~$5/month)
-
-```bash
-# Files already included: railway.toml, Procfile
-git push  # Railway auto-deploys from GitHub
-```
-
-Set environment variables in Railway dashboard → Variables tab.
-
-For SQLite persistence on Railway: Settings → Add Volume → mount at `/app/src/database`
+All protected routes require a Supabase `Authorization: Bearer <jwt>` header.
 
 ---
 
@@ -223,29 +197,23 @@ For SQLite persistence on Railway: Settings → Add Volume → mount at `/app/sr
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ | Claude API key (get at console.anthropic.com) |
+| `ANTHROPIC_API_KEY` | ✅ | Claude API key |
 | `SUPABASE_URL` | ✅ | Supabase project URL |
-| `SUPABASE_ANON_KEY` | ✅ | Supabase anonymous/public key |
-| `FINNHUB_API_KEY` | Optional | Improves news and fundamental data |
-| `IIFL_APP_KEY` | Optional | IIFL app key for India market-data provider |
-| `IIFL_APP_SECRET_KEY` | Optional | IIFL app secret; keep server-side only |
-| `TWELVE_DATA_API_KEY` | Optional | Twelve Data fallback for quote/history |
-| `ALPHA_VANTAGE_API_KEY` | Optional | Alpha Vantage fallback for quote/history |
+| `SUPABASE_ANON_KEY` | ✅ | Supabase anon/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Admin user management |
+| `FINNHUB_API_KEY` | Recommended | US quotes, fundamentals, company news |
+| `TWELVE_DATA_API_KEY` | Optional | Quote/history fallback |
+| `ALPHA_VANTAGE_API_KEY` | Optional | Quote/history fallback |
+| `DATABASE_URL` | Optional | Postgres URL for prod (defaults to local SQLite) |
+| `NEXT_PUBLIC_API_URL` | Optional | Frontend → API base URL (defaults to `http://localhost:8000`) |
 
-### Market Data Provider Order
-
-The app now routes quote, history, and fundamentals requests through a provider layer with SQLite caching. Override provider order with comma-separated environment variables:
+### Provider order overrides
 
 ```env
-INDIA_QUOTE_PROVIDER_ORDER=iifl,yfinance,twelvedata,alphavantage
-INDIA_HISTORY_PROVIDER_ORDER=iifl,yfinance,twelvedata,alphavantage
-INDIA_FUNDAMENTALS_PROVIDER_ORDER=yfinance,alphavantage
-US_QUOTE_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
-US_HISTORY_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
-US_FUNDAMENTALS_PROVIDER_ORDER=yfinance,alphavantage
+US_QUOTE_PROVIDER_ORDER=finnhub,yfinance,twelvedata,alphavantage
+INDIA_QUOTE_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
+# …also *_HISTORY_PROVIDER_ORDER and *_FUNDAMENTALS_PROVIDER_ORDER
 ```
-
-IIFL credentials can be stored now, but the IIFL provider remains disabled for data calls until its exact auth and market-data endpoints are mapped from the developer docs.
 
 ---
 
@@ -253,48 +221,40 @@ IIFL credentials can be stored now, but the IIFL provider remains disabled for d
 
 | Table | Purpose |
 |---|---|
-| `user_profiles` | Mirrors Supabase auth, stores account_type |
-| `picks` | AI-generated stock recommendations |
-| `portfolio` | Paper trading positions (per user) |
+| `user_profiles` | Mirrors Supabase auth; account_type + weekly run counters |
+| `picks` | AI-generated recommendations (per user, with attribution) |
+| `portfolio` | Paper-trading positions + saved per-holding analysis |
 | `transactions` | Buy/sell history |
-| `api_usage` | API cost tracking per user/run |
+| `api_usage` | Token usage & cost per user/run |
+| `market_data_cache` | Cached provider responses (quote/history/fundamentals) |
 
 ---
 
-## Screenshots
+## Deployment
 
-> Dashboard with live ticker tape and market status
+The backend deploys on **Railway** (config in `railway.toml`):
 
-> Stock detail page — Chart, Technicals, News, Events tabs (Groww-style)
+```toml
+[deploy]
+startCommand = "uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
+```
 
-> Admin dashboard — user management, per-user API cost breakdown
+Set the env vars in Railway → Variables. For SQLite persistence, add a Volume mounted at `/app/src/database` (or set `DATABASE_URL` to a Supabase Postgres connection string). Deploy the `frontend/` separately (e.g. Vercel) with `NEXT_PUBLIC_API_URL` pointing at the API.
 
 ---
 
 ## Known Limitations
 
-- **yfinance rate limits** — the app retries automatically but data may occasionally show `—` during market hours when rate limits are hit
-- **SQLite on cloud** — SQLite works locally and on Railway with a volume. For high-traffic use, migrate to Supabase PostgreSQL
-- **Streamlit session** — Streamlit Community Cloud puts apps to sleep after inactivity; use UptimeRobot to prevent this
-- **Paper trading only** — no real brokerage integration; prices are from yfinance and may have a 15-minute delay
-
----
-
-## Contributing
-
-Pull requests welcome. For major changes, open an issue first.
-
-```bash
-git checkout -b feature/your-feature
-git commit -m "feat: describe your change"
-git push origin feature/your-feature
-```
+- **yfinance rate limits** — the provider layer retries and falls back, but Indian data may briefly show `—` during peak hours.
+- **Finnhub free tier** — covers US fully; Indian (NSE) symbols 403, so India stays on yfinance. Finnhub daily candles are paid-tier, so history uses yfinance.
+- **SQLite on cloud** — fine locally and on Railway with a volume; for higher traffic migrate to Supabase Postgres via `DATABASE_URL`.
+- **Paper trading only** — no brokerage integration; prices may be ~15 min delayed.
 
 ---
 
 ## Disclaimer
 
-This tool is for **educational and research purposes only**. Nothing in this app constitutes financial advice. Always do your own research before investing. Past AI picks are not a guarantee of future performance.
+For **educational and research purposes only**. Nothing here is financial advice. Always do your own research. Past AI picks do not guarantee future performance.
 
 ---
 
