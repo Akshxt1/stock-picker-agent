@@ -7,11 +7,26 @@ from crewai.tools import tool
 from src.providers import market_data_client
 
 
+def _fmt_pct(v) -> str:
+    """Convert yfinance decimal fraction to percentage string (0.21 → '21.00%')."""
+    return f"{v * 100:.2f}%" if isinstance(v, (int, float)) else str(v)
+
+
+def _fmt_de(v) -> str:
+    """Convert yfinance debtToEquity (ratio×100) to plain ratio string (335.5 → '3.36')."""
+    return f"{v / 100:.2f}" if isinstance(v, (int, float)) else str(v)
+
+
 @tool("Get Stock Data")
 def get_stock_data(ticker: str) -> str:
     """
     Fetches historical price data and key fundamentals for a given stock ticker.
     Use this tool when you need basic pricing, volume, and company information.
+
+    Returned values:
+      - ROE and RevGrowth are expressed as percentages (e.g. '21.41%' means 21.41% return)
+      - Debt/Eq is the ratio (e.g. '3.35' means ₹3.35 debt per ₹1 equity)
+      - Filter thresholds: ROE < 8% is poor quality, Debt/Eq > 3.0 is high risk
     """
     try:
         client = market_data_client()
@@ -31,6 +46,13 @@ def get_stock_data(ticker: str) -> str:
         eps        = info.get("trailingEps", "N/A")
         high_52    = info.get("fiftyTwoWeekHigh", "N/A")
         low_52     = info.get("fiftyTwoWeekLow", "N/A")
+
+        # Format for unambiguous LLM consumption:
+        #   yfinance returns returnOnEquity and revenueGrowth as decimals (0.21 = 21%)
+        #   yfinance returns debtToEquity as ratio×100 (335.5 = 3.35× D/E ratio)
+        roe_fmt        = _fmt_pct(roe)
+        debt_to_eq_fmt = _fmt_de(debt_to_eq)
+        rev_growth_fmt = _fmt_pct(rev_growth)
 
         hist = client.history(ticker, period="1mo").data
         if hist.empty:
@@ -55,8 +77,8 @@ def get_stock_data(ticker: str) -> str:
             f"Data for {name} ({ticker}):\n"
             f"Sector: {sector} | Industry: {industry}\n"
             f"Market Cap: {market_cap}\n"
-            f"Fundamentals: P/E={pe}, P/B={pb}, ROE={roe}, Debt/Eq={debt_to_eq}, "
-            f"RevGrowth={rev_growth}, EPS={eps}\n"
+            f"Fundamentals: P/E={pe}, P/B={pb}, ROE={roe_fmt}, Debt/Eq={debt_to_eq_fmt}, "
+            f"RevGrowth={rev_growth_fmt}, EPS={eps}\n"
             f"52w High: {high_52} | 52w Low: {low_52}\n"
             f"{prices}"
         )

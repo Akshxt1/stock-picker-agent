@@ -16,21 +16,37 @@ def _is_indian_ticker(ticker: str) -> bool:
     return ticker.upper().endswith((".NS", ".BO"))
 
 
-def _fetch_headlines_yfinance(ticker: str) -> list[str]:
-    """Fetch news headlines via yfinance (works for NSE/BSE tickers, no API key needed)."""
+def _fetch_headlines_yfinance(ticker: str, days: int = 30) -> list[str]:
+    """Fetch news headlines via yfinance, filtered to the last `days` days."""
     try:
         stock = yf.Ticker(ticker)
         news = stock.news or []
+        cutoff = datetime.today() - timedelta(days=days)
         headlines = []
-        for item in news[:6]:
-            # yfinance news structure: item["content"]["title"] in newer versions
-            title = (
-                item.get("title")
-                or item.get("content", {}).get("title")
-                or ""
+        for item in news[:10]:
+            # yfinance newer versions: item["content"]["title"] + item["content"]["pubDate"]
+            content = item.get("content", {})
+            title = item.get("title") or content.get("title") or ""
+            if not title:
+                continue
+            # Filter by publish date when available
+            pub_date_raw = (
+                item.get("providerPublishTime")          # old yfinance: unix timestamp
+                or content.get("pubDate")               # new yfinance: ISO string
             )
-            if title:
-                headlines.append(title)
+            if pub_date_raw:
+                try:
+                    if isinstance(pub_date_raw, (int, float)):
+                        pub_dt = datetime.fromtimestamp(pub_date_raw)
+                    else:
+                        pub_dt = datetime.fromisoformat(str(pub_date_raw).rstrip("Z"))
+                    if pub_dt < cutoff:
+                        continue          # skip stale articles
+                except Exception:
+                    pass                  # date unreadable — include the headline anyway
+            headlines.append(title)
+            if len(headlines) >= 6:
+                break
         return headlines
     except Exception:
         return []
@@ -100,8 +116,10 @@ def _get_headlines(ticker: str) -> list[str]:
 @tool("Get Stock News")
 def get_stock_news(ticker: str) -> str:
     """
-    Fetches the latest news headlines for a given stock ticker.
-    Uses yfinance for Indian stocks (.NS/.BO), Finnhub for US stocks.
+    Fetches recent news headlines for a given stock ticker (last 30 days where dates
+    are available). Uses yfinance for Indian stocks (.NS/.BO), Finnhub for US stocks.
+    Note: yfinance may not always supply publish dates; in that case all cached headlines
+    are returned and the agent should treat them as approximate.
     """
     headlines = _get_headlines(ticker)
     if not headlines:

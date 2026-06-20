@@ -180,7 +180,12 @@ def get_all_sectors(market: str) -> list:
 
 
 def get_all_sizes(market: str) -> list:
-    """Returns all available size buckets for a market."""
+    """Returns all available size buckets for a market.
+
+    India follows SEBI's official classification — Large (top 100), Mid
+    (101–250), Small (251+). There is no 'Mega' tier in India.
+    US uses the informal Mega/Large/Mid/Small convention.
+    """
     if market.upper() == "INDIA":
         return ["Large", "Mid", "Small"]
     return ["Mega", "Large", "Mid", "Small"]

@@ -213,20 +213,25 @@ def discover_stocks(market: str, sector: str, size: str) -> str:
 def _filter_by_size(tickers: list, market: str, size: str) -> list:
     """
     Filter tickers by market cap to match the requested size bucket.
-    Thresholds (USD):
-        Mega  > 200B
-        Large = 10B - 200B
-        Mid   = 2B  - 10B
-        Small < 2B
-    For India (INR), multiply by ~85.
+
+    India thresholds (INR) follow SEBI definitions (approx ₹85/USD):
+        Mega  > ₹1.2T   (> $14B)   — Nifty 50 heavyweights
+        Large = ₹200B-1.2T ($2.4B-14B)
+        Mid   = ₹50B-200B  ($600M-2.4B)   ← SEBI: ~101st–250th by market cap
+        Small < ₹50B       (< $600M)
+
+    US thresholds (USD):
+        Mega  > $200B
+        Large = $10B-200B
+        Mid   = $2B-10B
+        Small < $2B
     """
     is_india = (market == "INDIA")
-    # INR thresholds
     thresholds = {
-        "Mega":  (200e9 * 85, float("inf")),
-        "Large": (10e9  * 85, 200e9 * 85),
-        "Mid":   (2e9   * 85, 10e9  * 85),
-        "Small": (0,          2e9   * 85),
+        "Mega":  (14e9  * 85, float("inf")),   # > ~₹1.2T
+        "Large": (2.4e9 * 85, 14e9  * 85),     # ₹204B – ₹1.2T
+        "Mid":   (600e6 * 85, 2.4e9 * 85),     # ₹51B  – ₹204B  (SEBI mid-cap zone)
+        "Small": (0,          600e6 * 85),      # < ₹51B
     } if is_india else {
         "Mega":  (200e9, float("inf")),
         "Large": (10e9,  200e9),
