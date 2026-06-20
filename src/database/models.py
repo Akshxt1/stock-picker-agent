@@ -46,15 +46,23 @@ class Pick(Base):
     technical_signal = Column(String)
     sentiment = Column(String)
     confidence = Column(String)
-    
+
+    # Fundamentals carried from the research stage (stored as the agent's
+    # display strings, e.g. "21.41%", "3.35", "15.00%")
+    roe = Column(String, nullable=True)
+    debt_to_equity = Column(String, nullable=True)
+    revenue_growth = Column(String, nullable=True)
+    pe_ratio = Column(String, nullable=True)
+
     stop_loss_pct = Column(Float)
     target_pct = Column(Float)
-    
+
     # Store the exact price when the pick was made for historical tracking
     price_at_pick = Column(Float)
     
     # Track who/what generated this pick
     run_by_user_id = Column(String, nullable=True)
+    run_by_username = Column(String, nullable=True)
 
 class Portfolio(Base):
     """Paper trading portfolio positions"""
@@ -79,9 +87,18 @@ class Portfolio(Base):
     is_open = Column(Boolean, default=True)
     exit_price = Column(Float, nullable=True)
     exit_date = Column(DateTime, nullable=True)
-    
+
     pick_id = Column(Integer, nullable=True)
     notes = Column(String, nullable=True)
+
+    # Saved output of the lightweight per-holding "Run Analysis"
+    target_price = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    recommendation = Column(String, nullable=True)   # HOLD / BUY / BUY_MORE / SELL
+    analysis_summary = Column(String, nullable=True)
+    why_buy = Column(JSON, nullable=True)            # list[str] reasoning
+    why_not_buy = Column(JSON, nullable=True)        # list[str] risks
+    analyzed_at = Column(DateTime, nullable=True)
 
 class Transaction(Base):
     """Log of all buy/sell actions"""
@@ -143,15 +160,66 @@ class UserProfile(Base):
     user_id = Column(String, unique=True, nullable=False)   # Supabase auth UUID
     username = Column(String, nullable=True)
     email = Column(String, nullable=True)
-    account_type = Column(String, default="free")           # 'free', 'pro', 'admin'
+    account_type = Column(String, default="trial")          # 'admin', 'premium', 'trial', 'guest'
+    weekly_runs  = Column(Integer, default=0)               # crew (market scan) runs this week
+    weekly_portfolio_runs = Column(Integer, default=0)     # deep/portfolio analysis runs this week
+    week_start   = Column(String, nullable=True)            # ISO date of current week start
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_seen = Column(DateTime, nullable=True)
 
 # ─── Initialization ───────────────────────────────────────────────────────────
 
 def init_db():
-    """Create all tables if they don't exist"""
+    """Create all tables if they don't exist, then run additive column migrations."""
     Base.metadata.create_all(engine)
+    _migrate_add_columns()
+
+
+def _migrate_add_columns():
+    """Idempotently add new nullable columns to existing tables.
+
+    create_all() never ALTERs an existing table, so for databases created
+    before these columns were introduced we add them by hand. Safe to run
+    on every startup — each column is only added if missing.
+    """
+    from sqlalchemy import inspect, text
+
+    additions = {
+        "picks": {
+            "roe": "VARCHAR",
+            "debt_to_equity": "VARCHAR",
+            "revenue_growth": "VARCHAR",
+            "pe_ratio": "VARCHAR",
+            "run_by_username": "VARCHAR",
+        },
+        "portfolio": {
+            "target_price": "FLOAT",
+            "stop_loss": "FLOAT",
+            "recommendation": "VARCHAR",
+            "analysis_summary": "VARCHAR",
+            "why_buy": "JSON",
+            "why_not_buy": "JSON",
+            "analyzed_at": "DATETIME",
+        },
+        "user_profiles": {
+            "weekly_portfolio_runs": "INTEGER DEFAULT 0",
+        },
+    }
+
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+        with engine.begin() as conn:
+            for table, cols in additions.items():
+                if table not in existing_tables:
+                    continue
+                have = {c["name"] for c in inspector.get_columns(table)}
+                for col, sqltype in cols.items():
+                    if col not in have:
+                        conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {sqltype}'))
+    except Exception as e:
+        # Migration is best-effort; never block startup on it.
+        print(f"  [migrate] skipped: {e}")
 
 
 # ─── Cost Calculators ─────────────────────────────────────────────────────────
@@ -189,6 +257,262 @@ def log_api_usage(user_id: str, username: str, model: str, input_tokens: int, ou
         )
         sess.add(usage)
         sess.commit()
+
+# ─── Route helpers (used by FastAPI routes) ──────────────────────────────────
+
+def get_user_picks(user_id: str, market: str = None) -> list:
+    with Session() as sess:
+        query = sess.query(Pick).filter(Pick.run_by_user_id == user_id)
+        if market:
+            query = query.filter(Pick.market == market)
+        rows = query.order_by(Pick.created_at.desc()).all()
+        return [_pick_to_dict(r) for r in rows]
+
+
+def _pick_to_dict(r) -> dict:
+    """Normalized pick shape consumed by the frontend (clickable, fully detailed)."""
+    return {
+        "id":             r.id,
+        "ticker":         r.ticker,
+        "company_name":   r.company,
+        "market":         r.market,
+        "sector":         r.sector,
+        "size":           r.size,
+        "current_price":  r.current_price,
+        "currency":       r.currency,
+        "recommendation": r.technical_signal,
+        "technical_signal": r.technical_signal,
+        "sentiment":      r.sentiment,
+        "confidence":     r.confidence,
+        "roe":            r.roe,
+        "debt_to_equity": r.debt_to_equity,
+        "revenue_growth": r.revenue_growth,
+        "pe_ratio":       r.pe_ratio,
+        "why_buy":        r.why_buy or [],
+        "why_not_buy":    r.why_not_buy or [],
+        "stop_loss_pct":  r.stop_loss_pct,
+        "target_pct":     r.target_pct,
+        "analysis_date":  r.analysis_date,
+        "run_by_username": getattr(r, "run_by_username", None),
+        "reasoning":      str(r.why_buy) if r.why_buy else "",
+    }
+
+def delete_pick(pick_id: int, user_id: str):
+    with Session() as sess:
+        row = sess.query(Pick).filter(Pick.id == pick_id, Pick.run_by_user_id == user_id).first()
+        if row:
+            sess.delete(row)
+            sess.commit()
+
+def get_portfolio(user_id: str, market: str = None) -> list:
+    with Session() as sess:
+        query = sess.query(Portfolio).filter(
+            Portfolio.user_id == user_id, Portfolio.is_open == True
+        )
+        if market:
+            query = query.filter(Portfolio.market == market)
+        rows = query.order_by(Portfolio.created_at.desc()).all()
+        return [
+            {
+                "id":               r.id,
+                "ticker":           r.ticker,
+                "market":           r.market,
+                "currency":         r.currency,
+                "quantity":         r.quantity,
+                "buy_price":        r.entry_price,
+                "current_price":    None,   # filled in by the route (live)
+                "pnl_pct":          None,
+                "pe_ratio":         None,
+                # saved "Run Analysis" output
+                "target_price":     r.target_price,
+                "stop_loss":        r.stop_loss,
+                "recommendation":   r.recommendation,
+                "analysis_summary": r.analysis_summary,
+                "why_buy":          r.why_buy or [],
+                "why_not_buy":      r.why_not_buy or [],
+                "analyzed_at":      r.analyzed_at.isoformat() if r.analyzed_at else None,
+            }
+            for r in rows
+        ]
+
+
+def save_holding_analysis(holding_id: int, user_id: str, recommendation: str,
+                          target_price: float = None, stop_loss: float = None,
+                          summary: str = None, why_buy: list = None,
+                          why_not_buy: list = None) -> bool:
+    """Persist the lightweight per-holding analysis result onto the position."""
+    with Session() as sess:
+        row = sess.query(Portfolio).filter(
+            Portfolio.id == holding_id, Portfolio.user_id == user_id
+        ).first()
+        if not row:
+            return False
+        row.recommendation   = recommendation
+        row.target_price     = target_price
+        row.stop_loss        = stop_loss
+        row.analysis_summary = summary
+        row.why_buy          = why_buy or []
+        row.why_not_buy      = why_not_buy or []
+        row.analyzed_at      = datetime.now(timezone.utc)
+        sess.commit()
+        return True
+
+def add_portfolio_position(user_id: str, ticker: str, quantity: float, buy_price: float,
+                           username: str = None):
+    t = ticker.upper()
+    if t.endswith(".NS") or t.endswith(".BO"):
+        market, currency = "INDIA", "INR"
+    else:
+        market, currency = "US", "USD"
+    with Session() as sess:
+        pos = Portfolio(
+            user_id=user_id,
+            username=username,
+            ticker=t,
+            quantity=quantity,
+            entry_price=buy_price,
+            market=market,
+            currency=currency,
+        )
+        sess.add(pos)
+        sess.commit()
+
+def remove_portfolio_position(holding_id: int, user_id: str):
+    with Session() as sess:
+        row = sess.query(Portfolio).filter(
+            Portfolio.id == holding_id, Portfolio.user_id == user_id
+        ).first()
+        if row:
+            row.is_open = False
+            sess.commit()
+
+
+ACCOUNT_LIMITS = {
+    "admin":   {"crew_runs": 9999, "portfolio_runs": 9999},
+    "premium": {"crew_runs": 5,    "portfolio_runs": 5},
+    "trial":   {"crew_runs": 2,    "portfolio_runs": 3},
+    "guest":   {"crew_runs": 0,    "portfolio_runs": 0},
+}
+
+
+def upsert_user_profile(user_id: str, email: str = None, username: str = None) -> dict:
+    """Create or update a user profile. Returns the profile as dict."""
+    from datetime import date
+    week_start = date.today().strftime("%Y-W%W")  # e.g. "2026-W25"
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            # New user — default to 'trial' unless it's the admin email
+            acct = "admin" if email == "akshatgupta428@gmail.com" else "trial"
+            profile = UserProfile(
+                user_id=user_id, email=email, username=username,
+                account_type=acct, weekly_runs=0, week_start=week_start,
+                last_seen=datetime.now(timezone.utc),
+            )
+            sess.add(profile)
+        else:
+            # Reset weekly counters if new week
+            if profile.week_start != week_start:
+                profile.weekly_runs = 0
+                profile.weekly_portfolio_runs = 0
+                profile.week_start  = week_start
+            if email:    profile.email    = email
+            if username: profile.username = username
+            profile.last_seen = datetime.now(timezone.utc)
+            # Always enforce admin for the admin email, even if DB had old value
+            if email == "akshatgupta428@gmail.com":
+                profile.account_type = "admin"
+            # Migrate old account types to new names
+            elif profile.account_type in ("free", None, ""):
+                profile.account_type = "trial"
+            elif profile.account_type == "pro":
+                profile.account_type = "premium"
+        sess.commit()
+        sess.refresh(profile)
+        return {
+            "user_id":      profile.user_id,
+            "email":        profile.email,
+            "username":     profile.username,
+            "account_type": profile.account_type,
+            "weekly_runs":  profile.weekly_runs,
+            "weekly_portfolio_runs": profile.weekly_portfolio_runs or 0,
+            "limits":       ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"]),
+        }
+
+
+def increment_run_count(user_id: str) -> bool:
+    """Increment weekly crew (market-scan) run count. True if allowed, False if at limit."""
+    from datetime import date
+    week_start = date.today().strftime("%Y-W%W")
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            return True  # unknown user, allow
+        if profile.week_start != week_start:
+            profile.weekly_runs = 0
+            profile.weekly_portfolio_runs = 0
+            profile.week_start  = week_start
+        limits = ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"])
+        if profile.weekly_runs >= limits["crew_runs"]:
+            return False
+        profile.weekly_runs += 1
+        sess.commit()
+        return True
+
+
+def increment_portfolio_run_count(user_id: str) -> bool:
+    """Increment weekly deep/portfolio analysis count. True if allowed, False if at limit.
+
+    Used by single-stock Deep Analysis and portfolio-level analysis — both draw
+    from the account's `portfolio_runs` weekly quota.
+    """
+    from datetime import date
+    week_start = date.today().strftime("%Y-W%W")
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            return True
+        if profile.week_start != week_start:
+            profile.weekly_runs = 0
+            profile.weekly_portfolio_runs = 0
+            profile.week_start  = week_start
+        limits = ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"])
+        if (profile.weekly_portfolio_runs or 0) >= limits["portfolio_runs"]:
+            return False
+        profile.weekly_portfolio_runs = (profile.weekly_portfolio_runs or 0) + 1
+        sess.commit()
+        return True
+
+
+def get_all_user_profiles() -> list:
+    with Session() as sess:
+        rows = sess.query(UserProfile).order_by(UserProfile.last_seen.desc()).all()
+        return [
+            {
+                "user_id":      r.user_id,
+                "email":        r.email,
+                "username":     r.username,
+                "account_type": r.account_type,
+                "weekly_runs":  r.weekly_runs,
+                "last_seen":    r.last_seen.isoformat() if r.last_seen else None,
+                "created_at":   r.created_at.isoformat() if r.created_at else None,
+                "limits":       ACCOUNT_LIMITS.get(r.account_type, ACCOUNT_LIMITS["trial"]),
+            }
+            for r in rows
+        ]
+
+
+def update_account_type(user_id: str, account_type: str) -> bool:
+    if account_type not in ACCOUNT_LIMITS:
+        return False
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            return False
+        profile.account_type = account_type
+        sess.commit()
+    return True
+
 
 def get_usage_stats(user_id: str = None) -> dict:
     """Get aggregated usage stats for a user (or global if user_id is None)"""
