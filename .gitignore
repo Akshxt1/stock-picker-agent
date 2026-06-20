@@ -43,6 +43,11 @@ logs/
 # Provider data caches (regenerated at runtime)
 src/providers/_iifl_scripmaster.csv
 
+# Python build artifacts
+dist/
+build/
+*.egg-info/
+
 # OS files
 .DS_Store
 Thumbs.db
