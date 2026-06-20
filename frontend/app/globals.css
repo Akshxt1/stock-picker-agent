@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light mode */
+    --background: 0 0% 98%;
+    --foreground: 224 20% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 20% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 20% 10%;
+    --primary: 38 95% 48%;
+    --primary-foreground: 224 20% 10%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 224 20% 20%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 10% 46%;
+    --accent: 158 64% 42%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 88%;
+    --input: 220 13% 88%;
+    --ring: 38 95% 48%;
+    --radius: 0.6rem;
+    --gain: 158 64% 38%;
+    --loss: 0 84% 58%;
+  }
+
+  .dark {
+    --background: 222 20% 6%;
+    --foreground: 210 20% 92%;
+    --card: 222 20% 9%;
+    --card-foreground: 210 20% 92%;
+    --popover: 222 20% 9%;
+    --popover-foreground: 210 20% 92%;
+    --primary: 38 95% 52%;
+    --primary-foreground: 222 20% 6%;
+    --secondary: 222 20% 14%;
+    --secondary-foreground: 210 20% 80%;
+    --muted: 222 20% 12%;
+    --muted-foreground: 215 15% 52%;
+    --accent: 158 64% 44%;
+    --accent-foreground: 222 20% 6%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 20% 16%;
+    --input: 222 20% 14%;
+    --ring: 38 95% 52%;
+    --gain: 158 64% 44%;
+    --loss: 0 72% 55%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground antialiased; font-feature-settings: "cv02","cv03","cv04","cv11"; }
+  h1,h2,h3,h4 { @apply tracking-tight; }
+}
+
+/* ── Ticker tape ─────────────────────────────────────────────────────────── */
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.ticker-track {
+  animation: ticker-scroll 40s linear infinite;
+}
+.ticker-track:hover { animation-play-state: paused; }
+
+/* ── Cursor blink for stream ─────────────────────────────────────────────── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.stream-cursor::after {
+  content: "▋";
+  animation: blink 1s step-start infinite;
+  @apply text-primary;
+}
+
+/* ── Glassmorphism card ──────────────────────────────────────────────────── */
+.glass {
+  @apply bg-card/80 backdrop-blur-md border border-border/60;
+}
+
+/* ── Gradient text ───────────────────────────────────────────────────────── */
+.gradient-text {
+  @apply bg-gradient-to-r from-primary via-amber-400 to-yellow-300 bg-clip-text text-transparent;
+}
+
+/* ── Subtle shine on hover ───────────────────────────────────────────────── */
+.shine {
+  position: relative;
+  overflow: hidden;
+}
+.shine::before {
+  content: "";
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+  transition: left 0.5s ease;
+}
+.shine:hover::before { left: 140%; }
+
+/* ── Number colors ───────────────────────────────────────────────────────── */
+.gain { color: hsl(var(--gain)); }
+.loss { color: hsl(var(--loss)); }
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
