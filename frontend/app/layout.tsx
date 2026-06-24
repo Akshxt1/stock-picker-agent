@@ -1,10 +1,11 @@
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
-import { ThemeProvider } from "@/lib/theme-provider"
-import { AuthProvider }  from "@/lib/auth-context"
-import { RunProvider }   from "@/lib/run-context"
-import AppShell          from "@/components/app-shell"
+import { ThemeProvider }    from "@/lib/theme-provider"
+import { AuthProvider }     from "@/lib/auth-context"
+import { RunProvider }      from "@/lib/run-context"
+import { SettingsProvider } from "@/lib/settings-context"
+import AppShell             from "@/components/app-shell"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -18,11 +19,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
-          <AuthProvider>
-            <RunProvider>
-              <AppShell>{children}</AppShell>
-            </RunProvider>
-          </AuthProvider>
+          <SettingsProvider>
+            <AuthProvider>
+              <RunProvider>
+                <AppShell>{children}</AppShell>
+              </RunProvider>
+            </AuthProvider>
+          </SettingsProvider>
         </ThemeProvider>
       </body>
     </html>

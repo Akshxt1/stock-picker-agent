@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { readSettingSync } from "@/lib/settings-context"
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts"
@@ -28,7 +29,7 @@ export default function StockDetailPage() {
 
   const [quote,   setQuote]   = useState<StockQuote | null>(null)
   const [candles, setCandles] = useState<Candle[]>([])
-  const [period,  setPeriod]  = useState("6mo")
+  const [period,  setPeriod]  = useState<string>(() => readSettingSync("defaultChartPeriod"))
   const [chartLoading, setChartLoading] = useState(true)
 
   useEffect(() => {

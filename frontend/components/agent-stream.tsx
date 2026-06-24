@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { universe }  from "@/lib/api"
-import { useAuth }   from "@/lib/auth-context"
-import { useRun }    from "@/lib/run-context"
+import { universe }       from "@/lib/api"
+import { useAuth }        from "@/lib/auth-context"
+import { useRun }         from "@/lib/run-context"
+import { useSettings, readSettingSync } from "@/lib/settings-context"
 import { Button }    from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -20,8 +21,9 @@ const MARKETS = ["INDIA", "US"]
 export default function AgentStream({ lockedMarket }: { lockedMarket?: string } = {}) {
   const { user, isGuest } = useAuth()
   const { state, start, stop, reset } = useRun()
+  const { settings } = useSettings()
 
-  const [market,  setMarket]  = useState(lockedMarket ?? "INDIA")
+  const [market,  setMarket]  = useState(() => lockedMarket ?? readSettingSync("defaultMarket"))
   const [sector,  setSector]  = useState("")
   const [size,    setSize]    = useState("")
   const [sectors, setSectors] = useState<string[]>([])
@@ -43,7 +45,13 @@ export default function AgentStream({ lockedMarket }: { lockedMarket?: string } 
 
   useEffect(() => {
     universe.sectors(market).then(s => { setSectors(s); if (!state.params) setSector(s[0] ?? "") })
-    universe.sizes(market).then(s   => { setSizes(s);   if (!state.params) setSize(s[2] ?? "Mid") })
+    universe.sizes(market).then(s => {
+      setSizes(s)
+      if (!state.params) {
+        const preferred = settings.defaultCapSize
+        setSize(s.includes(preferred) ? preferred : (s[1] ?? s[0] ?? ""))
+      }
+    })
   }, [market])
 
   useEffect(() => {

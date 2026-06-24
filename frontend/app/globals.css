@@ -111,6 +111,14 @@
 .gain { color: hsl(var(--gain)); }
 .loss { color: hsl(var(--loss)); }
 
+/* ── Accent color overrides (set via data-accent on <html>) ─────────────── */
+html[data-accent="indigo"]      { --primary: 230 75% 58%; --ring: 230 75% 58%; }
+html.dark[data-accent="indigo"] { --primary: 230 75% 64%; --ring: 230 75% 64%; }
+html[data-accent="teal"]        { --primary: 172 70% 40%; --ring: 172 70% 40%; }
+html.dark[data-accent="teal"]   { --primary: 172 70% 46%; --ring: 172 70% 46%; }
+html[data-accent="rose"]        { --primary: 350 80% 52%; --ring: 350 80% 52%; }
+html.dark[data-accent="rose"]   { --primary: 350 80% 58%; --ring: 350 80% 58%; }
+
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
