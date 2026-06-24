@@ -21,6 +21,18 @@ load_dotenv(find_dotenv())
 logger = logging.getLogger(__name__)
 
 
+# yfinance lazily creates its timezone-cache dir on first use. Under concurrent
+# requests two threads race the "exists? -> makedirs" check and the loser logs a
+# noisy "Failed to create TzCache ... [Errno 17] File exists" warning. Creating
+# the dir once here (module import is single-threaded) wins the race for good.
+_YF_CACHE_DIR = os.environ.get("YF_CACHE_DIR", str(Path.home() / ".cache" / "py-yfinance"))
+try:
+    Path(_YF_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+    yf.set_tz_cache_location(_YF_CACHE_DIR)
+except Exception as exc:  # pragma: no cover - cache is a best-effort optimization
+    logger.debug("Could not pre-create yfinance tz cache at %s: %s", _YF_CACHE_DIR, exc)
+
+
 class ProviderError(Exception):
     pass
 
