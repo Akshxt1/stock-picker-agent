@@ -9,6 +9,9 @@ from dotenv import load_dotenv, find_dotenv
 # Automatically hunt down the .env file and load it safely on Windows/Mac/Linux
 load_dotenv(find_dotenv())
 
+# Email that is always granted admin (configurable; keep one source of truth).
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "akshatgupta428@gmail.com")
+
 # Read database URL from environment variable, default to local SQLite
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///src/database/stock_picker.db")
 
@@ -403,7 +406,7 @@ def upsert_user_profile(user_id: str, email: str = None, username: str = None) -
         profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
         if not profile:
             # New user — default to 'trial' unless it's the admin email
-            acct = "admin" if email == "akshatgupta428@gmail.com" else "trial"
+            acct = "admin" if email == ADMIN_EMAIL else "trial"
             profile = UserProfile(
                 user_id=user_id, email=email, username=username,
                 account_type=acct, weekly_runs=0, week_start=week_start,
@@ -420,7 +423,7 @@ def upsert_user_profile(user_id: str, email: str = None, username: str = None) -
             if username: profile.username = username
             profile.last_seen = datetime.now(timezone.utc)
             # Always enforce admin for the admin email, even if DB had old value
-            if email == "akshatgupta428@gmail.com":
+            if email == ADMIN_EMAIL:
                 profile.account_type = "admin"
             # Migrate old account types to new names
             elif profile.account_type in ("free", None, ""):
@@ -482,6 +485,24 @@ def increment_portfolio_run_count(user_id: str) -> bool:
         profile.weekly_portfolio_runs = (profile.weekly_portfolio_runs or 0) + 1
         sess.commit()
         return True
+
+
+def decrement_run_count(user_id: str) -> None:
+    """Refund one weekly crew run (e.g. the run errored before producing anything)."""
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if profile and (profile.weekly_runs or 0) > 0:
+            profile.weekly_runs -= 1
+            sess.commit()
+
+
+def decrement_portfolio_run_count(user_id: str) -> None:
+    """Refund one weekly deep/portfolio analysis run."""
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if profile and (profile.weekly_portfolio_runs or 0) > 0:
+            profile.weekly_portfolio_runs -= 1
+            sess.commit()
 
 
 def get_all_user_profiles() -> list:

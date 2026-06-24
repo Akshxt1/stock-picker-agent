@@ -24,7 +24,7 @@ _SECTORS = {
 }
 
 _SIZES = {
-    "INDIA": ["Mega", "Large", "Mid", "Small"],
+    "INDIA": ["Large", "Mid", "Small"],
     "US":    ["Mega", "Large", "Mid", "Small"],
 }
 

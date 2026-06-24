@@ -1,22 +1,26 @@
 """
 src/api/routes/market.py
 
-All yfinance calls are:
-  1. Wrapped in a timeout (won't hang forever)
-  2. Cached for 15 minutes (subsequent loads are instant)
-  3. Movers use ThreadPoolExecutor (parallel, not sequential)
+India data → Upstox (primary, batch-capable, no rate limits).
+US data    → yfinance / Finnhub (unchanged).
 """
 
 import datetime
+import logging
 import time
 import threading
 import concurrent.futures
 
+import requests as _requests
 from dotenv import load_dotenv, find_dotenv
-from fastapi import APIRouter, Query, Depends, HTTPException
-from src.api.routes.auth import get_current_user
+from fastapi import APIRouter, Query, HTTPException
+
+# NOTE: Market-data endpoints below are intentionally PUBLIC (non-sensitive,
+# cached) so the guest dashboard can render indices/news/movers/heatmap.
 
 load_dotenv(find_dotenv())
+
+logger = logging.getLogger(__name__)
 
 try:
     import yfinance as yf
@@ -39,12 +43,16 @@ _CACHE_LOCK = threading.Lock()
 _TTL = 900  # 15 minutes
 
 
+_NEWS_TTL = 300  # 5 minutes for news endpoints
+
+
 def _get(key: str):
     with _CACHE_LOCK:
         entry = _CACHE.get(key)
     if entry:
         val, ts = entry
-        if time.time() - ts < _TTL:
+        ttl = _NEWS_TTL if key.startswith("news:") else _TTL
+        if time.time() - ts < ttl:
             return val
     return None
 
@@ -98,15 +106,58 @@ def market_status():
 # ── Live index values (for dashboard stat cards) ──────────────────────────────
 
 _INDICES = [
-    {"key": "NIFTY",  "symbol": "^NSEI",  "label": "NIFTY 50",  "currency": "INR"},
-    {"key": "SENSEX", "symbol": "^BSESN", "label": "SENSEX",    "currency": "INR"},
-    {"key": "SP500",  "symbol": "^GSPC",  "label": "S&P 500",   "currency": "USD"},
-    {"key": "NASDAQ", "symbol": "^IXIC",  "label": "NASDAQ",    "currency": "USD"},
+    # ── India ─────────────────────────────────────────────────────────────────
+    {"key": "NIFTY",     "symbol": "^NSEI",    "label": "NIFTY 50",       "currency": "INR",
+     "upstox_key": "NSE_INDEX|Nifty 50",      "group": "india"},
+    {"key": "SENSEX",    "symbol": "^BSESN",   "label": "SENSEX",         "currency": "INR",
+     "upstox_key": "BSE_INDEX|SENSEX",         "group": "india"},
+    {"key": "BANKNIFTY", "symbol": "^NSEBANK", "label": "BANK NIFTY",     "currency": "INR",
+     "upstox_key": "NSE_INDEX|Nifty Bank",     "group": "india"},
+    {"key": "NIFTYIT",   "symbol": "^CNXIT",   "label": "NIFTY IT",       "currency": "INR",
+     "upstox_key": "NSE_INDEX|Nifty IT",       "group": "india"},
+    {"key": "MIDCAP",    "symbol": "^NSMIDCP", "label": "NIFTY MIDCAP",   "currency": "INR",
+     "upstox_key": "NSE_INDEX|NIFTY Midcap 100","group": "india"},
+    # ── US ────────────────────────────────────────────────────────────────────
+    {"key": "SP500",  "symbol": "^GSPC",  "label": "S&P 500",   "currency": "USD", "group": "us"},
+    {"key": "NASDAQ", "symbol": "^IXIC",  "label": "NASDAQ",    "currency": "USD", "group": "us"},
 ]
 
 
+def _upstox_index(upstox_key: str) -> dict | None:
+    """Fetch a single index quote from Upstox (no instrument mapping needed)."""
+    import os
+    token = os.getenv("UPSTOX_ANALYTICS_TOKEN", "")
+    if not token:
+        return None
+    try:
+        r = _requests.get(
+            "https://api.upstox.com/v2/market-quote/quotes",
+            params={"instrument_key": upstox_key},
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        body = r.json()
+        if body.get("status") != "success":
+            return None
+        q = next(iter((body.get("data") or {}).values()), None)
+        if not q:
+            return None
+        price = float(q.get("last_price") or 0)
+        if not price:
+            return None
+        ohlc  = q.get("ohlc") or {}
+        prev  = float(ohlc.get("close") or price)
+        net   = float(q.get("net_change") or (price - prev))
+        chg   = (net / prev * 100) if prev else 0.0
+        return {"price": price, "prev": prev, "chg": chg}
+    except Exception as exc:
+        logger.debug("Upstox index %s: %s", upstox_key, exc)
+        return None
+
+
 @router.get("/indices")
-def market_indices(_user=Depends(get_current_user)):
+def market_indices():
     """Live values + day change for the major indices shown on the dashboard."""
     cache_key = "indices"
     cached = _get(cache_key)
@@ -114,9 +165,24 @@ def market_indices(_user=Depends(get_current_user)):
         return cached
 
     def _one(ix: dict):
+        # India indices — try Upstox first
+        upstox_key = ix.get("upstox_key")
+        group = ix.get("group", "india")
+        if upstox_key:
+            data = _upstox_index(upstox_key)
+            if data:
+                return {
+                    "key":        ix["key"],
+                    "label":      ix["label"],
+                    "currency":   ix["currency"],
+                    "group":      group,
+                    "value":      round(data["price"], 2),
+                    "change_pct": round(data["chg"], 2),
+                }
+
+        # US indices (and India fallback) — yfinance
         t = yf.Ticker(ix["symbol"])
         price = prev = None
-        # fast_info first (cheap); fall back to history (^BSESN/^IXIC often need it)
         try:
             info  = t.fast_info
             price = getattr(info, "last_price", None)
@@ -133,17 +199,23 @@ def market_indices(_user=Depends(get_current_user)):
                 pass
         if price is None:
             return {"key": ix["key"], "label": ix["label"], "currency": ix["currency"],
-                    "value": None, "change_pct": None}
+                    "group": group, "value": None, "change_pct": None}
         chg = ((price - prev) / prev * 100) if price and prev else None
         return {
-            "key": ix["key"], "label": ix["label"], "currency": ix["currency"],
-            "value": round(price, 2),
+            "key":        ix["key"],
+            "label":      ix["label"],
+            "currency":   ix["currency"],
+            "group":      group,
+            "value":      round(price, 2),
             "change_pct": round(chg, 2) if chg is not None else None,
         }
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        out = list(ex.map(lambda i: _yf_safe(lambda ix=i: _one(ix), timeout=5,
-                                             fallback={**i, "value": None, "change_pct": None}), _INDICES))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as ex:
+        out = list(ex.map(
+            lambda i: _yf_safe(lambda ix=i: _one(ix), timeout=10,
+                               fallback={**i, "value": None, "change_pct": None}),
+            _INDICES,
+        ))
     _set(cache_key, out)
     return out
 
@@ -178,14 +250,34 @@ def active_symbols():
 # ── Live ticker tape ──────────────────────────────────────────────────────────
 
 def _fetch_tick(sym: str):
+    india = sym.endswith((".NS", ".BO"))
+    display = sym.replace(".NS", "").replace(".BO", "")
+
+    # India — use Upstox
+    if india:
+        try:
+            from src.providers import market_data_client
+            upstox = market_data_client().providers.get("upstox")
+            if upstox and upstox.available():
+                q = upstox.quote(sym)
+                return {
+                    "symbol":     sym,
+                    "display":    display,
+                    "price":      round(q["price"], 2),
+                    "change_pct": q["day_change_pct"],
+                    "currency":   "INR",
+                }
+        except Exception as exc:
+            logger.debug("Upstox tick %s: %s", sym, exc)
+
+    # US (or India fallback) — yfinance
     info  = yf.Ticker(sym).fast_info
     price = getattr(info, "last_price", None)
     prev  = getattr(info, "previous_close", None)
     chg   = ((price - prev) / prev * 100) if price and prev else None
-    india = sym.endswith(".NS")
     return {
         "symbol":     sym,
-        "display":    sym.replace(".NS", ""),
+        "display":    display,
         "price":      round(price, 2) if price else None,
         "change_pct": round(chg, 2) if chg is not None else None,
         "currency":   "INR" if india else "USD",
@@ -195,7 +287,6 @@ def _fetch_tick(sym: str):
 @router.get("/ticker")
 def ticker_tape(
     symbols: str = Query(...),
-    _user   = Depends(get_current_user),
 ):
     cache_key = f"ticker:{symbols}"
     cached = _get(cache_key)
@@ -216,6 +307,45 @@ def ticker_tape(
 # ── News ──────────────────────────────────────────────────────────────────────
 
 _NEWS_TICKERS = {"INDIA": "^NSEI", "US": "^GSPC"}
+
+
+def _google_news_rss(query: str, limit: int = 10) -> list:
+    """Fetch latest headlines from Google News RSS (no API key, always fresh)."""
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    encoded = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+    try:
+        resp = requests.get(
+            url, timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; StockPickerBot/1.0)"},
+        )
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+        channel = root.find("channel")
+        if channel is None:
+            return []
+        out = []
+        for item in (channel.findall("item") or [])[:limit]:
+            title = item.findtext("title", "")
+            link  = item.findtext("link", "") or ""
+            pub_date = item.findtext("pubDate", "")
+            source_el = item.find("source")
+            publisher = source_el.text if source_el is not None else ""
+            if not title:
+                continue
+            published = ""
+            if pub_date:
+                try:
+                    published = parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")
+                except Exception:
+                    published = pub_date[:10]
+            out.append({"title": title, "publisher": publisher, "link": link, "published": published})
+        return out
+    except Exception:
+        return []
 
 
 def _finnhub_general_news(limit: int = 10) -> list:
@@ -275,13 +405,18 @@ def market_news(market: str = Query("INDIA")):
         return cached
 
     m = market.upper()
-    # US / Both → Finnhub general (multi-source, fresh). India → yfinance NIFTY feed.
     if m == "US":
         result = _finnhub_general_news() or _yf_index_news("^GSPC")
     elif m == "BOTH":
-        result = (_yf_index_news("^NSEI", 6) + _finnhub_general_news(6))
-    else:
-        result = _yf_index_news("^NSEI")
+        result = (
+            _google_news_rss("Indian stock market NSE Nifty", 6)
+            + _finnhub_general_news(6)
+        ) or (_yf_index_news("^NSEI", 6) + _yf_index_news("^GSPC", 6))
+    else:  # INDIA
+        result = (
+            _google_news_rss("Indian stock market NSE Nifty Sensex", 10)
+            or _yf_index_news("^NSEI")
+        )
 
     _set(cache_key, result)
     return result
@@ -312,29 +447,219 @@ def market_movers(market: str = Query("INDIA")):
     else:
         universe = _MOVER_UNIVERSE.get(m, _MOVER_UNIVERSE["INDIA"])
 
-    def _one(sym: str):
-        info  = yf.Ticker(sym).fast_info
-        price = getattr(info, "last_price", None)
-        prev  = getattr(info, "previous_close", None)
-        if price and prev:
-            return {
-                "symbol":     sym,
-                "display":    sym.replace(".NS", ""),
-                "price":      round(price, 2),
-                "change_pct": round((price - prev) / prev * 100, 2),
-                "currency":   "INR" if sym.endswith(".NS") else "USD",
-            }
-        return None
+    india_syms = [s for s in universe if s.endswith((".NS", ".BO"))]
+    us_syms    = [s for s in universe if not s.endswith((".NS", ".BO"))]
+    all_quotes: list[dict] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
-        results = list(ex.map(lambda s: _yf_safe(lambda sym=s: _one(sym), timeout=5), universe))
+    # India — single Upstox batch call
+    if india_syms:
+        fetched: set[str] = set()
+        try:
+            from src.providers import market_data_client
+            upstox = market_data_client().providers.get("upstox")
+            if upstox and upstox.available():
+                batch = upstox.batch_quotes(india_syms)
+                for q in batch:
+                    ticker = q["ticker"]
+                    if q.get("price") is not None:
+                        all_quotes.append({
+                            "symbol":     ticker,
+                            "display":    ticker.replace(".NS", "").replace(".BO", ""),
+                            "price":      round(q["price"], 2),
+                            "change_pct": q["day_change_pct"],
+                            "currency":   "INR",
+                        })
+                        fetched.add(ticker)
+        except Exception as exc:
+            logger.warning("Upstox movers batch failed: %s", exc)
+            fetched = set()
 
-    movers = sorted([r for r in results if r], key=lambda x: x["change_pct"], reverse=True)
+        # yfinance fallback for any India tickers Upstox missed
+        missed = [s for s in india_syms if s not in fetched]
+        if missed:
+            def _yf_india(sym: str):
+                info  = yf.Ticker(sym).fast_info
+                price = getattr(info, "last_price", None)
+                prev  = getattr(info, "previous_close", None)
+                if price and prev:
+                    return {
+                        "symbol": sym, "display": sym.replace(".NS", ""),
+                        "price": round(price, 2),
+                        "change_pct": round((price - prev) / prev * 100, 2),
+                        "currency": "INR",
+                    }
+                return None
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+                fb = list(ex.map(lambda s: _yf_safe(lambda sym=s: _yf_india(sym), timeout=5), missed))
+            all_quotes.extend(r for r in fb if r)
+
+    # US — yfinance / Finnhub via existing path
+    if us_syms:
+        def _yf_us(sym: str):
+            info  = yf.Ticker(sym).fast_info
+            price = getattr(info, "last_price", None)
+            prev  = getattr(info, "previous_close", None)
+            if price and prev:
+                return {
+                    "symbol": sym, "display": sym,
+                    "price": round(price, 2),
+                    "change_pct": round((price - prev) / prev * 100, 2),
+                    "currency": "USD",
+                }
+            return None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            us_res = list(ex.map(lambda s: _yf_safe(lambda sym=s: _yf_us(sym), timeout=5), us_syms))
+        all_quotes.extend(r for r in us_res if r)
+
+    movers = sorted(all_quotes, key=lambda x: x["change_pct"], reverse=True)
     out = {
         "gainers": movers[:5],
         "losers":  list(reversed(movers[-5:])),
     }
     _set(cache_key, out)
+    return out
+
+
+# ── Market holidays ──────────────────────────────────────────────────────────
+
+@router.get("/holidays")
+def market_holidays(exchange: str = Query("NSE")):
+    """Upcoming market holidays for NSE or BSE (current year, today onwards)."""
+    cache_key = f"holidays:{exchange}"
+    cached = _get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        from src.providers import market_data_client
+        upstox = market_data_client().providers.get("upstox")
+        if upstox and upstox.available():
+            result = upstox.market_holidays(exchange.upper())
+            _set(cache_key, result)
+            return result
+    except Exception as exc:
+        logger.debug("Holidays fetch failed: %s", exc)
+    return []
+
+
+# ── FII / DII institutional flows (India) ────────────────────────────────────
+
+_NSE_HOME = "https://www.nseindia.com"
+_NSE_FII_DII = "https://www.nseindia.com/api/fiidiiTradeReact"
+_NSE_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/reports/fii-dii",
+}
+
+
+def _fetch_fii_dii() -> list[dict]:
+    """Daily FII/DII cash-market flows from NSE. Needs a session cookie first."""
+    try:
+        sess = _requests.Session()
+        sess.headers.update(_NSE_HEADERS)
+        # Prime cookies from the homepage / report page
+        sess.get(_NSE_HOME, timeout=8)
+        sess.get("https://www.nseindia.com/reports/fii-dii", timeout=8)
+        r = sess.get(_NSE_FII_DII, timeout=10)
+        r.raise_for_status()
+        raw = r.json()
+    except Exception as exc:
+        logger.debug("FII/DII fetch failed: %s", exc)
+        return []
+
+    out = []
+    for row in raw if isinstance(raw, list) else []:
+        cat = str(row.get("category", "")).strip()
+        # Normalize "FII/FPI **" / "DII **" → "FII" / "DII"
+        if cat.upper().startswith("FII"):
+            label = "FII"
+        elif cat.upper().startswith("DII"):
+            label = "DII"
+        else:
+            label = cat
+
+        def _f(v):
+            try:
+                return round(float(str(v).replace(",", "")), 2)
+            except (ValueError, TypeError):
+                return None
+
+        out.append({
+            "category":  label,
+            "date":      row.get("date", ""),
+            "buy_value":  _f(row.get("buyValue")),
+            "sell_value": _f(row.get("sellValue")),
+            "net_value":  _f(row.get("netValue")),
+        })
+    return out
+
+
+@router.get("/fii-dii")
+def fii_dii():
+    """Latest daily FII/DII cash-market net flows (₹ Cr), from NSE."""
+    cache_key = "fii-dii"
+    cached = _get(cache_key)
+    if cached is not None:
+        return cached
+    result = _fetch_fii_dii()
+    if result:
+        _set(cache_key, result)
+    return result
+
+
+# ── Sector heatmap (India) ───────────────────────────────────────────────────
+
+# Representative liquid constituents per sector — averaged to gauge sector breadth.
+_SECTOR_CONSTITUENTS = {
+    "IT":         ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"],
+    "Banking":    ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS"],
+    "Auto":       ["MARUTI.NS", "TATAMOTORS.NS", "M&M.NS", "BAJAJ-AUTO.NS", "HEROMOTOCO.NS"],
+    "Pharma":     ["SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS", "AUROPHARMA.NS"],
+    "FMCG":       ["HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "BRITANNIA.NS", "DABUR.NS"],
+    "Energy":     ["RELIANCE.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "BPCL.NS"],
+    "Metals":     ["TATASTEEL.NS", "HINDALCO.NS", "JSWSTEEL.NS", "COALINDIA.NS", "VEDL.NS"],
+    "Financials": ["BAJFINANCE.NS", "BAJAJFINSV.NS", "HDFCLIFE.NS", "SBILIFE.NS", "CHOLAFIN.NS"],
+    "Realty":     ["DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS", "BRIGADE.NS"],
+}
+
+
+@router.get("/sector-heatmap")
+def sector_heatmap():
+    """Average intraday % change per India sector (color-coded breadth view)."""
+    cache_key = "sector-heatmap"
+    cached = _get(cache_key)
+    if cached:
+        return cached
+
+    # Flatten all constituents, fetch in one batch
+    all_syms = [s for syms in _SECTOR_CONSTITUENTS.values() for s in syms]
+    quote_map: dict[str, float] = {}
+    try:
+        from src.providers import market_data_client
+        upstox = market_data_client().providers.get("upstox")
+        if upstox and upstox.available():
+            for q in upstox.batch_quotes(all_syms):
+                if q.get("day_change_pct") is not None:
+                    quote_map[q["ticker"]] = q["day_change_pct"]
+    except Exception as exc:
+        logger.warning("Sector heatmap batch failed: %s", exc)
+
+    sectors = []
+    for sector, syms in _SECTOR_CONSTITUENTS.items():
+        changes = [quote_map[s] for s in syms if s in quote_map]
+        if changes:
+            sectors.append({
+                "sector":     sector,
+                "change_pct": round(sum(changes) / len(changes), 2),
+                "count":      len(changes),
+            })
+
+    sectors.sort(key=lambda x: x["change_pct"], reverse=True)
+    out = {"sectors": sectors}
+    if sectors:
+        _set(cache_key, out)
     return out
 
 

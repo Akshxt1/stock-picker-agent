@@ -42,6 +42,7 @@ logs/
 
 # Provider data caches (regenerated at runtime)
 src/providers/_iifl_scripmaster.csv
+src/providers/_upstox_instruments.json
 
 # Python build artifacts
 dist/

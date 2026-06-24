@@ -1,5 +1,5 @@
 # src/tools/news_sentiment.py
-# News: Finnhub for US stocks, yfinance fallback for Indian (.NS/.BO) stocks
+# News: Upstox for India stocks, Finnhub for US stocks; yfinance as fallback
 # Sentiment: keyword scoring on headlines from whichever source works
 
 from crewai.tools import tool
@@ -14,6 +14,19 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 
 def _is_indian_ticker(ticker: str) -> bool:
     return ticker.upper().endswith((".NS", ".BO"))
+
+
+def _fetch_headlines_upstox(ticker: str) -> list[str]:
+    """Fetch news headlines via Upstox News API (India tickers only)."""
+    try:
+        from src.providers import market_data_client
+        upstox = market_data_client().providers.get("upstox")
+        if upstox and upstox.available():
+            items = upstox.news(ticker)
+            return [it["title"] for it in items if it.get("title")][:6]
+    except Exception:
+        pass
+    return []
 
 
 def _fetch_headlines_yfinance(ticker: str, days: int = 30) -> list[str]:
@@ -102,14 +115,16 @@ def _score_sentiment(headlines: list[str]) -> str:
 def _get_headlines(ticker: str) -> list[str]:
     """Route to the right news source based on ticker type."""
     if _is_indian_ticker(ticker):
-        headlines = _fetch_headlines_yfinance(ticker)
-        # Fallback to Finnhub anyway in case yfinance has nothing
-        if not headlines:
-            headlines = _fetch_headlines_finnhub(ticker)
+        headlines = (
+            _fetch_headlines_upstox(ticker)
+            or _fetch_headlines_yfinance(ticker)
+            or _fetch_headlines_finnhub(ticker)
+        )
     else:
-        headlines = _fetch_headlines_finnhub(ticker)
-        if not headlines:
-            headlines = _fetch_headlines_yfinance(ticker)
+        headlines = (
+            _fetch_headlines_finnhub(ticker)
+            or _fetch_headlines_yfinance(ticker)
+        )
     return headlines
 
 
@@ -140,5 +155,5 @@ def get_stock_sentiment(ticker: str) -> dict:
         "ticker":            ticker,
         "overall_sentiment": overall,
         "recent_headlines":  headlines,
-        "source":            "yfinance" if _is_indian_ticker(ticker) else "finnhub",
+        "source":            "upstox" if _is_indian_ticker(ticker) else "finnhub",
     }

@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react"
 import { api, type AuthUser } from "@/lib/api"
 
-export const ADMIN_EMAIL = "akshatgupta428@gmail.com"
+export const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL ?? "akshatgupta428@gmail.com"
 
 export type AccountType = "admin" | "premium" | "trial" | "guest"
 

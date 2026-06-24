@@ -14,14 +14,11 @@ import os
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from src.api.routes.auth import get_current_user
+from src.api.routes.auth import get_current_user, ADMIN_EMAIL
 
 router = APIRouter()
 
 LOG_FILE = Path(__file__).parents[3] / "logs" / "app.log"
-
-
-ADMIN_EMAIL = "akshatgupta428@gmail.com"
 
 def require_admin(user=Depends(get_current_user)):
     is_admin = user.get("account_type") == "admin" or user.get("email") == ADMIN_EMAIL

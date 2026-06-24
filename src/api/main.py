@@ -6,6 +6,7 @@ Railway:      uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
 
 import os
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,27 +39,34 @@ logger = logging.getLogger("stockpicker")
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="StockPicker API", version="2.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    logger.info("StockPicker API started — DB initialised")
+    yield
+
+app = FastAPI(title="StockPicker API", version="2.0.0", lifespan=lifespan)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 
 _raw = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 origins = [o.strip() for o in _raw.split(",") if o.strip()]
 
+# A wildcard origin cannot be combined with credentialed requests — browsers
+# reject it and it's a security foot-gun. Fail safe by disabling credentials
+# in that case rather than silently shipping a broken/insecure CORS policy.
+_allow_credentials = "*" not in origins
+if not _allow_credentials:
+    logger.warning("ALLOWED_ORIGINS contains '*'; disabling credentialed CORS. "
+                   "Set explicit origins in production.")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── DB init on startup ────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    logger.info("StockPicker API started — DB initialised")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 

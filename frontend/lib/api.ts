@@ -170,6 +170,7 @@ export interface IndexQuote {
   currency:   string
   value:      number | null
   change_pct: number | null
+  group?:     "india" | "us"
 }
 
 export const market = {
@@ -179,10 +180,14 @@ export const market = {
     request<Array<{ symbol: string; price: number | null; change_pct: number | null }>>(
       `/api/market/ticker?symbols=${symbols.join(",")}`
     ),
-  news:   (market: string) =>
+  news:     (market: string) =>
     request<NewsItem[]>(`/api/market/news?market=${market}`),
-  movers: (market: string) =>
+  movers:   (market: string) =>
     request<{ gainers: Mover[]; losers: Mover[] }>(`/api/market/movers?market=${market}`),
+  holidays: (exchange = "NSE") =>
+    request<MarketHoliday[]>(`/api/market/holidays?exchange=${exchange}`),
+  fiiDii:   () => request<FiiDiiFlow[]>(`/api/market/fii-dii`),
+  sectorHeatmap: () => request<{ sectors: SectorHeat[] }>(`/api/market/sector-heatmap`),
 }
 
 // ── Universe ──────────────────────────────────────────────────────────────────
@@ -220,6 +225,11 @@ export interface StockQuote {
   dividend_yield?: string | null
   fifty_two_week_high?: number | null
   fifty_two_week_low?: number | null
+  // Upstox-only (India tickers)
+  upper_circuit?: number | null
+  lower_circuit?: number | null
+  vwap?: number | null
+  oi?: number | null
 }
 
 export interface Candle {
@@ -251,18 +261,97 @@ export interface StockEvents {
   ticker: string
   dividends: Array<{ date: string; amount: number }>
   upcoming: Array<{ label: string; date: string }>
+  corporate_actions?: Array<{ type: string; label: string; date: string; details: string; upcoming: boolean }>
   dividend_rate?: number
 }
 
+export interface ShareholdingQuarter {
+  date: string
+  promoter: number
+  fii: number
+  dii: number
+  public: number
+}
+export interface ShareholdingData {
+  ticker: string
+  quarters: ShareholdingQuarter[]
+  india_only?: boolean
+}
+
+export interface IncomeEntry {
+  period: string
+  revenue: number | null
+  pat: number | null
+  ebitda: number | null
+}
+export interface FinancialsData {
+  ticker: string
+  income: IncomeEntry[]
+  balance_sheet: {
+    total_assets: number | null
+    total_debt: number | null
+    cash: number | null
+    networth: number | null
+  }
+  ratios: {
+    pe: number | null
+    pb: number | null
+    roe: number | null
+    ev_ebitda: number | null
+    roce: number | null
+    roa: number | null
+    quick: number | null
+  }
+  india_only?: boolean
+}
+
+export interface Peer {
+  ticker: string
+  name: string
+  price: number | null
+  pe: number | null
+}
+export interface PeersData {
+  ticker: string
+  peers: Peer[]
+  india_only?: boolean
+}
+
+export interface MarketHoliday {
+  date: string
+  description?: string
+  holiday_type?: string
+}
+
+export interface FiiDiiFlow {
+  category: string          // "FII" | "DII"
+  date: string
+  buy_value: number | null
+  sell_value: number | null
+  net_value: number | null
+}
+
+export interface SectorHeat {
+  sector: string
+  change_pct: number
+  count: number
+}
+
 export const stock = {
-  quote:      (t: string) => request<StockQuote>(`/api/stock/${encodeURIComponent(t)}/quote`),
-  history:    (t: string, period = "6mo") =>
+  quote:        (t: string) => request<StockQuote>(`/api/stock/${encodeURIComponent(t)}/quote`),
+  history:      (t: string, period = "6mo") =>
     request<{ ticker: string; period: string; currency: string; candles: Candle[] }>(
       `/api/stock/${encodeURIComponent(t)}/history?period=${period}`),
-  technicals: (t: string) => request<Technicals>(`/api/stock/${encodeURIComponent(t)}/technicals`),
-  news:       (t: string) => request<StockNews>(`/api/stock/${encodeURIComponent(t)}/news`),
-  events:     (t: string) => request<StockEvents>(`/api/stock/${encodeURIComponent(t)}/events`),
-  ai:         (t: string) => request<Pick & { has_pick: boolean }>(`/api/stock/${encodeURIComponent(t)}/ai`),
+  intraday:     (t: string) =>
+    request<{ ticker: string; currency: string; candles: Candle[] }>(
+      `/api/stock/${encodeURIComponent(t)}/intraday`),
+  technicals:   (t: string) => request<Technicals>(`/api/stock/${encodeURIComponent(t)}/technicals`),
+  news:         (t: string) => request<StockNews>(`/api/stock/${encodeURIComponent(t)}/news`),
+  events:       (t: string) => request<StockEvents>(`/api/stock/${encodeURIComponent(t)}/events`),
+  ai:           (t: string) => request<Pick & { has_pick: boolean }>(`/api/stock/${encodeURIComponent(t)}/ai`),
+  shareholding: (t: string) => request<ShareholdingData>(`/api/stock/${encodeURIComponent(t)}/shareholding`),
+  financials:   (t: string) => request<FinancialsData>(`/api/stock/${encodeURIComponent(t)}/financials`),
+  peers:        (t: string) => request<PeersData>(`/api/stock/${encodeURIComponent(t)}/peers`),
 }
 
 // ── SSE crew stream ───────────────────────────────────────────────────────────

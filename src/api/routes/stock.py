@@ -63,6 +63,11 @@ def quote(ticker: str, _user=Depends(get_current_user)):
         out["price"]          = _clean(q.get("price"))
         out["previous_close"] = _clean(q.get("previous_close"))
         out["day_change_pct"] = _clean(q.get("day_change_pct"))
+        # Upstox-only fields (India tickers)
+        out["upper_circuit"]  = _clean(q.get("upper_circuit"))
+        out["lower_circuit"]  = _clean(q.get("lower_circuit"))
+        out["vwap"]           = _clean(q.get("average_price"))
+        out["oi"]             = _clean(q.get("oi"))
     except Exception as e:
         out["price_error"] = str(e)
 
@@ -177,6 +182,48 @@ def technicals(ticker: str, _user=Depends(get_current_user)):
 
 # ── News ──────────────────────────────────────────────────────────────────────
 
+def _google_news_rss_stock(ticker: str, limit: int = 10) -> list[dict]:
+    """Google News RSS search for a specific stock (no API key, always fresh)."""
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    base = ticker.split(".")[0]  # strip .NS / .BO
+    query = f"{base} NSE stock India" if _is_indian(ticker) else f"{base} stock"
+    encoded = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+    try:
+        import requests as _req
+        resp = _req.get(
+            url, timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; StockPickerBot/1.0)"},
+        )
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+        channel = root.find("channel")
+        if channel is None:
+            return []
+        out = []
+        for item in (channel.findall("item") or [])[:limit]:
+            title = item.findtext("title", "")
+            link  = item.findtext("link", "") or ""
+            pub_date = item.findtext("pubDate", "")
+            source_el = item.find("source")
+            publisher = source_el.text if source_el is not None else ""
+            if not title:
+                continue
+            published = ""
+            if pub_date:
+                try:
+                    published = parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")
+                except Exception:
+                    published = pub_date[:10]
+            out.append({"title": title, "publisher": publisher, "link": link, "published": published})
+        return out
+    except Exception:
+        return []
+
+
 def _finnhub_news_items(ticker: str) -> list[dict]:
     """Rich company news from Finnhub (US): title, source, link, date. Last 21 days."""
     import os, requests
@@ -214,8 +261,19 @@ def _finnhub_news_items(ticker: str) -> list[dict]:
         return []
 
 
+def _upstox_news_items(ticker: str) -> list[dict]:
+    """News via Upstox News API (India tickers only)."""
+    try:
+        upstox = market_data_client().providers.get("upstox")
+        if upstox and upstox.available():
+            return upstox.news(ticker)
+    except Exception:
+        pass
+    return []
+
+
 def _yfinance_news_items(ticker: str) -> list[dict]:
-    """News via yfinance (used for Indian tickers Finnhub can't cover)."""
+    """News via yfinance — fallback for tickers not covered by Upstox/Finnhub."""
     import yfinance as yf
     items = []
     try:
@@ -252,9 +310,14 @@ def _yfinance_news_items(ticker: str) -> list[dict]:
 def news(ticker: str, _user=Depends(get_current_user)):
     from src.tools.news_sentiment import _score_sentiment
 
-    # US → Finnhub (fresh, many sources). India → yfinance. Each falls back to the other.
     if _is_indian(ticker):
-        items = _yfinance_news_items(ticker) or _finnhub_news_items(ticker)
+        # Upstox first (direct per-instrument news), then Google RSS, then yfinance
+        items = (
+            _upstox_news_items(ticker)
+            or _google_news_rss_stock(ticker)
+            or _yfinance_news_items(ticker)
+            or _finnhub_news_items(ticker)
+        )
     else:
         items = _finnhub_news_items(ticker) or _yfinance_news_items(ticker)
 
@@ -262,31 +325,98 @@ def news(ticker: str, _user=Depends(get_current_user)):
     return {"ticker": ticker, "sentiment": _score_sentiment(titles), "items": items}
 
 
-# ── Events (dividends / earnings) ─────────────────────────────────────────────
+# ── Events (dividends / earnings / corporate actions) ─────────────────────────
 
 @router.get("/{ticker}/events")
 def events(ticker: str, _user=Depends(get_current_user)):
-    import yfinance as yf
     from datetime import datetime
 
-    out: dict = {"ticker": ticker, "dividends": [], "upcoming": []}
+    out: dict = {"ticker": ticker, "dividends": [], "upcoming": [], "corporate_actions": []}
+
+    # ── India: use Upstox Corporate Actions (richer than yfinance) ────────────
+    if _is_indian(ticker):
+        try:
+            upstox = market_data_client().providers.get("upstox")
+            if upstox and upstox.available():
+                actions = upstox.corporate_actions(ticker)
+                today = datetime.today()
+                label_map = {"Bonus": "Bonus Issue", "Split": "Stock Split", "Rights": "Rights Issue"}
+
+                for action in actions:
+                    name    = action.get("name", "")
+                    ex_date = action.get("expiry_date", "")
+                    amount  = action.get("amount")
+                    ratio   = action.get("ratio")
+
+                    # Parse ex-date string like "05 Jun 2026"
+                    parsed_date = ""
+                    is_future   = False
+                    if ex_date:
+                        try:
+                            dt = datetime.strptime(ex_date, "%d %b %Y")
+                            parsed_date = dt.strftime("%Y-%m-%d")
+                            is_future   = dt >= today
+                        except ValueError:
+                            parsed_date = ex_date
+
+                    if name == "Dividend" and amount is not None:
+                        out["dividends"].append({
+                            "date":   parsed_date,
+                            "amount": round(float(amount), 2),
+                        })
+                        if is_future:
+                            out["upcoming"].append({
+                                "label": "Ex-Dividend Date",
+                                "date":  parsed_date,
+                            })
+                        # Full history entry
+                        out["corporate_actions"].append({
+                            "type":    "Dividend",
+                            "label":   "Dividend",
+                            "date":    parsed_date,
+                            "details": f"₹{round(float(amount), 2)}/share",
+                            "upcoming": is_future,
+                        })
+                    elif name in ("Bonus", "Split", "Rights"):
+                        detail = label_map.get(name, name)
+                        if ratio:
+                            detail += f" ({ratio})"
+                        if is_future:
+                            out["upcoming"].append({"label": detail, "date": parsed_date})
+                        out["corporate_actions"].append({
+                            "type":    name,
+                            "label":   label_map.get(name, name),
+                            "date":    parsed_date,
+                            "details": ratio or "",
+                            "upcoming": is_future,
+                        })
+
+                out["dividends"] = out["dividends"][:8]
+                # Sort full history newest-first; cap at 15 entries
+                out["corporate_actions"].sort(key=lambda a: a.get("date", ""), reverse=True)
+                out["corporate_actions"] = out["corporate_actions"][:15]
+                return out
+        except Exception:
+            pass
+
+    # ── US (or India fallback) — yfinance ─────────────────────────────────────
+    import yfinance as yf
+
     try:
         t = yf.Ticker(ticker)
 
-        # Historical dividends (last 8)
         try:
             divs = t.dividends
             if divs is not None and len(divs):
                 for idx, amount in list(divs.items())[-8:]:
                     out["dividends"].append({
-                        "date": str(idx)[:10],
+                        "date":   str(idx)[:10],
                         "amount": round(float(amount), 2),
                     })
                 out["dividends"].reverse()
         except Exception:
             pass
 
-        # Upcoming events from calendar / info
         try:
             info = t.info or {}
         except Exception:
@@ -297,7 +427,7 @@ def events(ticker: str, _user=Depends(get_current_user)):
             try:
                 out["upcoming"].append({
                     "label": "Ex-Dividend Date",
-                    "date": datetime.utcfromtimestamp(ex_div).strftime("%Y-%m-%d"),
+                    "date":  datetime.utcfromtimestamp(ex_div).strftime("%Y-%m-%d"),
                 })
             except Exception:
                 pass
@@ -319,6 +449,183 @@ def events(ticker: str, _user=Depends(get_current_user)):
         out["error"] = str(e)
 
     return out
+
+
+# ── Shareholding pattern ─────────────────────────────────────────────────────
+
+def _parse_shareholding(raw: list) -> list[dict]:
+    """Normalize Upstox shareholding to [{date, promoter, fii, dii, public}]."""
+    quarters = []
+    for item in (raw or [])[:6]:
+        if not isinstance(item, dict):
+            continue
+
+        def _pct(*keys) -> float:
+            for k in keys:
+                v = item.get(k)
+                if v is not None:
+                    try:
+                        return round(float(str(v).replace("%", "").strip()), 2)
+                    except (ValueError, TypeError):
+                        pass
+            return 0.0
+
+        promoter = _pct("promoter", "promoters", "promoter_group", "promoter_holding")
+        fii      = _pct("fii", "fiis", "fii_holding", "foreign_portfolio_investor")
+        dii      = _pct("dii", "diis", "dii_holding", "mutual_fund")
+        public   = _pct("public", "retail", "public_holding", "others")
+        date     = str(item.get("date") or item.get("quarter") or item.get("as_of_date") or "")
+
+        if promoter == 0 and fii == 0 and dii == 0 and public == 0:
+            continue
+        quarters.append({
+            "date": date, "promoter": promoter,
+            "fii": fii, "dii": dii, "public": public,
+        })
+    return quarters
+
+
+@router.get("/{ticker}/shareholding")
+def shareholding_pattern(ticker: str, _user=Depends(get_current_user)):
+    if not _is_indian(ticker):
+        return {"ticker": ticker, "quarters": [], "india_only": True}
+    try:
+        upstox = market_data_client().providers.get("upstox")
+        if not upstox or not upstox.available():
+            return {"ticker": ticker, "quarters": []}
+        raw = upstox.shareholding(ticker)
+        return {"ticker": ticker, "quarters": _parse_shareholding(raw)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Shareholding unavailable: {e}")
+
+
+# ── Financial summary ─────────────────────────────────────────────────────────
+
+def _numf(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(",", "").replace("%", "").strip()) or None
+    except (ValueError, TypeError):
+        return None
+
+
+@router.get("/{ticker}/financials")
+def financials(ticker: str, _user=Depends(get_current_user)):
+    if not _is_indian(ticker):
+        return {"ticker": ticker, "income": [], "balance_sheet": {}, "ratios": {}, "india_only": True}
+    try:
+        upstox = market_data_client().providers.get("upstox")
+        if not upstox or not upstox.available():
+            return {"ticker": ticker, "income": [], "balance_sheet": {}, "ratios": {}}
+
+        income_raw = []
+        try:
+            income_raw = upstox.income_statement(ticker)
+        except Exception:
+            pass
+
+        income = []
+        for q in (income_raw or [])[:8]:
+            if not isinstance(q, dict):
+                continue
+            period  = str(q.get("date") or q.get("period") or q.get("quarter") or "")
+            revenue = _numf(q.get("revenue") or q.get("total_revenue") or q.get("net_revenue") or q.get("sales"))
+            pat     = _numf(q.get("pat") or q.get("net_profit") or q.get("profit_after_tax") or q.get("net_income"))
+            ebitda  = _numf(q.get("ebitda") or q.get("operating_profit"))
+            if period and (revenue is not None or pat is not None):
+                income.append({"period": period, "revenue": revenue, "pat": pat, "ebitda": ebitda})
+
+        bs_raw = []
+        try:
+            bs_raw = upstox.balance_sheet(ticker)
+        except Exception:
+            pass
+
+        balance: dict = {}
+        if bs_raw and isinstance(bs_raw[0], dict):
+            latest = bs_raw[0]
+            balance = {
+                "total_assets": _numf(latest.get("total_assets") or latest.get("total_asset")),
+                "total_debt":   _numf(latest.get("total_debt") or latest.get("borrowings")),
+                "cash":         _numf(latest.get("cash") or latest.get("cash_and_equivalents")),
+                "networth":     _numf(latest.get("networth") or latest.get("net_worth") or latest.get("shareholders_equity")),
+            }
+
+        ratios: dict = {}
+        try:
+            fund_data = market_data_client().fundamentals(ticker).data or {}
+            ratios = {
+                "pe":       _clean(fund_data.get("trailingPE")),
+                "pb":       _clean(fund_data.get("priceToBook")),
+                "roe":      fund_data.get("returnOnEquity"),
+                "ev_ebitda":fund_data.get("_ev_ebitda"),
+                "roce":     fund_data.get("_roce"),
+                "roa":      fund_data.get("_roa"),
+                "quick":    fund_data.get("_quick_ratio"),
+            }
+        except Exception:
+            pass
+
+        return {"ticker": ticker, "income": income, "balance_sheet": balance, "ratios": ratios}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Financials unavailable: {e}")
+
+
+# ── Peers / Competitors ───────────────────────────────────────────────────────
+
+@router.get("/{ticker}/peers")
+def peers(ticker: str, _user=Depends(get_current_user)):
+    if not _is_indian(ticker):
+        return {"ticker": ticker, "peers": [], "india_only": True}
+    try:
+        upstox = market_data_client().providers.get("upstox")
+        if not upstox or not upstox.available():
+            return {"ticker": ticker, "peers": []}
+
+        raw = upstox.competitors(ticker)
+        peer_list = []
+        for p in (raw or [])[:6]:
+            if not isinstance(p, dict):
+                continue
+            sym = str(p.get("ticker") or p.get("symbol") or p.get("trading_symbol") or "")
+            if sym and not sym.endswith((".NS", ".BO")):
+                sym = f"{sym}.NS"
+            name  = p.get("name") or p.get("company_name") or sym
+            price = _clean(p.get("price") or p.get("last_price"))
+            pe    = _clean(p.get("pe") or p.get("pe_ratio"))
+            peer_list.append({"ticker": sym, "name": name, "price": price, "pe": pe})
+
+        missing = [p["ticker"] for p in peer_list if p["price"] is None and p["ticker"]]
+        if missing:
+            try:
+                batch = upstox.batch_quotes(missing)
+                pm = {q["ticker"]: q["price"] for q in batch}
+                for p in peer_list:
+                    if p["price"] is None:
+                        p["price"] = pm.get(p["ticker"])
+            except Exception:
+                pass
+
+        return {"ticker": ticker, "peers": peer_list}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Peers unavailable: {e}")
+
+
+# ── Intraday candles ──────────────────────────────────────────────────────────
+
+@router.get("/{ticker}/intraday")
+def intraday_chart(ticker: str, interval: str = Query("30minute"), _user=Depends(get_current_user)):
+    if not _is_indian(ticker):
+        return {"ticker": ticker, "candles": [], "india_only": True}
+    try:
+        upstox = market_data_client().providers.get("upstox")
+        if not upstox or not upstox.available():
+            return {"ticker": ticker, "candles": []}
+        candles = upstox.intraday(ticker, interval)
+        return {"ticker": ticker, "currency": "INR", "candles": candles}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Intraday data unavailable: {e}")
 
 
 # ── AI analysis (latest saved pick) ───────────────────────────────────────────

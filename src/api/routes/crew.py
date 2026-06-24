@@ -14,6 +14,7 @@ Each SSE event is a JSON object:
 
 import json
 import queue
+import logging
 import threading
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -21,6 +22,8 @@ from fastapi.responses import StreamingResponse
 
 from src.agents.crew import run_stock_picker, run_single_stock_analysis
 from src.api.routes.auth import get_current_user
+
+logger = logging.getLogger("stockpicker.crew")
 
 router = APIRouter()
 
@@ -89,10 +92,14 @@ def _make_callbacks(msg_queue: queue.Queue):
 
 
 def _crew_event_stream(market: str, sector: str, size: str,
-                       user_id: str, username: str):
+                       user_id: str, username: str, refund=None):
     """
     Runs the CrewAI pipeline in a background thread and yields SSE events
     as the agents work. Exactly like how ChatGPT streams its response.
+
+    `refund` (if given) is called once if the run ends in an error/timeout
+    before producing results, so the user isn't charged a weekly run for a
+    failed analysis.
     """
     msg_queue: queue.Queue = queue.Queue()
     step_callback, task_callback = _make_callbacks(msg_queue)
@@ -129,8 +136,15 @@ def _crew_event_stream(market: str, sector: str, size: str,
         try:
             msg = msg_queue.get(timeout=360)   # 6-minute safety timeout
         except queue.Empty:
+            if refund:
+                try: refund()
+                except Exception: pass
             yield "data: " + json.dumps({"type": "error", "text": "Timed out"}) + "\n\n"
             break
+
+        if msg["type"] == "error" and refund:
+            try: refund()
+            except Exception: pass
 
         yield "data: " + json.dumps(msg) + "\n\n"
 
@@ -166,14 +180,20 @@ def stream_crew(
             )
     except HTTPException:
         raise
-    except Exception:
-        pass  # If DB check fails, allow the run
+    except Exception as e:
+        # If the DB check fails we allow the run, but log it so quota-bypass is visible.
+        logger.warning("Run-limit check failed for %s, allowing run: %s", user.get("user_id"), e)
+
+    def _refund():
+        from src.database.models import decrement_run_count
+        decrement_run_count(user["user_id"])
 
     return StreamingResponse(
         _crew_event_stream(
             market, sector, size,
             user_id=user["user_id"],
             username=user["name"],
+            refund=_refund,
         ),
         media_type="text/event-stream",
         headers={
@@ -185,7 +205,7 @@ def stream_crew(
 
 # ── Single-stock Deep Analysis (full crew on one ticker) ──────────────────────
 
-def _single_stock_event_stream(ticker: str, user_id: str, username: str):
+def _single_stock_event_stream(ticker: str, user_id: str, username: str, refund=None):
     """Runs the 4-agent crew on ONE ticker and streams clean SSE events."""
     msg_queue: queue.Queue = queue.Queue()
     step_callback, task_callback = _make_callbacks(msg_queue)
@@ -215,8 +235,14 @@ def _single_stock_event_stream(ticker: str, user_id: str, username: str):
         try:
             msg = msg_queue.get(timeout=360)
         except queue.Empty:
+            if refund:
+                try: refund()
+                except Exception: pass
             yield "data: " + json.dumps({"type": "error", "text": "Timed out"}) + "\n\n"
             break
+        if msg["type"] == "error" and refund:
+            try: refund()
+            except Exception: pass
         yield "data: " + json.dumps(msg) + "\n\n"
         if msg["type"] in ("done", "error"):
             break
@@ -245,11 +271,15 @@ def stream_single_stock(
             )
     except HTTPException:
         raise
-    except Exception:
-        pass  # if the counter check fails, allow the run
+    except Exception as e:
+        logger.warning("Deep-analysis limit check failed for %s, allowing run: %s", user.get("user_id"), e)
+
+    def _refund():
+        from src.database.models import decrement_portfolio_run_count
+        decrement_portfolio_run_count(user["user_id"])
 
     return StreamingResponse(
-        _single_stock_event_stream(ticker, user_id=user["user_id"], username=user["name"]),
+        _single_stock_event_stream(ticker, user_id=user["user_id"], username=user["name"], refund=_refund),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

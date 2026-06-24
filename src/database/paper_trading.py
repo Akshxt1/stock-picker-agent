@@ -1,8 +1,28 @@
 # src/database/paper_trading.py
 
 from datetime import datetime, timezone
-import yfinance as yf
 from src.database.models import Session, Portfolio, Transaction, Pick
+
+
+def _live_price(ticker: str) -> float | None:
+    """Fetch the latest traded price: Upstox for India, yfinance for US."""
+    try:
+        if ticker.endswith((".NS", ".BO")):
+            from src.providers import market_data_client
+            upstox = market_data_client().providers.get("upstox")
+            if upstox and upstox.available():
+                q = upstox.quote(ticker)
+                price = q.get("price")
+                if price:
+                    return float(price)
+        # US or India fallback
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(period="1d")
+        if not hist.empty:
+            return float(hist["Close"].iloc[-1])
+    except Exception:
+        pass
+    return None
 
 
 def _fmt_pct(v):
@@ -68,11 +88,11 @@ def add_to_portfolio(ticker: str, quantity: float, user_id: str, username: str, 
             entry_price = custom_price
         else:
             try:
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period="1d")
-                if hist.empty:
+                entry_price = _live_price(ticker)
+                if not entry_price:
                     raise ValueError(f"Could not retrieve a live price for ticker: {ticker}")
-                entry_price = float(hist["Close"].iloc[-1])
+            except ValueError:
+                raise
             except Exception as e:
                 raise ValueError(f"Failed to fetch live market price for {ticker}: {str(e)}")
 
@@ -141,12 +161,7 @@ def sell_position(position_id: int, notes: str = None, custom_price: float = Non
         if custom_price is not None and custom_price > 0:
             exit_price = custom_price
         else:
-            try:
-                stock = yf.Ticker(pos.ticker)
-                hist = stock.history(period="1d")
-                exit_price = float(hist["Close"].iloc[-1]) if not hist.empty else pos.entry_price
-            except Exception:
-                exit_price = pos.entry_price
+            exit_price = _live_price(pos.ticker) or pos.entry_price
 
         # Close position record completely
         pos.is_open = False
@@ -190,12 +205,7 @@ def get_portfolio(market: str = None, user_id: str = None) -> list:
 
         output = []
         for p in positions:
-            try:
-                stock = yf.Ticker(p.ticker)
-                hist = stock.history(period="1d")
-                current_price = float(hist["Close"].iloc[-1]) if not hist.empty else p.entry_price
-            except Exception:
-                current_price = p.entry_price
+            current_price = _live_price(p.ticker) or p.entry_price
 
             invested = p.entry_price * p.quantity
             current_value = current_price * p.quantity

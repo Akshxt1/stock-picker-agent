@@ -9,12 +9,42 @@ POST   /api/portfolio/{holding_id}/analyze — lightweight AI verdict (Target/SL
 
 import os
 import json
+import time
+import logging
+import threading
 import concurrent.futures
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from src.api.routes.auth import get_current_user
+
+logger = logging.getLogger("stockpicker.portfolio")
+
+
+# ── Lightweight in-memory throttle for the per-holding LLM verdict ────────────
+# Each /analyze call costs a real Anthropic request, so cap how often a single
+# user can trigger them to prevent runaway-cost abuse. In-memory is fine for the
+# current single-process deployment (mirrors the market.py cache approach).
+
+_ANALYZE_MAX_PER_WINDOW = 20      # max analyze calls ...
+_ANALYZE_WINDOW_SECONDS = 60 * 60 # ... per user per rolling hour
+_analyze_hits: dict[str, list[float]] = {}
+_analyze_lock = threading.Lock()
+
+
+def _check_analyze_throttle(user_id: str) -> None:
+    """Raise 429 if the user has exceeded the per-hour analyze budget."""
+    now = time.time()
+    with _analyze_lock:
+        hits = [t for t in _analyze_hits.get(user_id, []) if now - t < _ANALYZE_WINDOW_SECONDS]
+        if len(hits) >= _ANALYZE_MAX_PER_WINDOW:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many analysis requests. Please wait a few minutes and try again.",
+            )
+        hits.append(now)
+        _analyze_hits[user_id] = hits
 
 try:
     from src.database.models import (
@@ -157,6 +187,12 @@ def analyze_holding(holding_id: int, user=Depends(get_current_user)):
     if not _DB:
         raise HTTPException(status_code=503, detail="DB unavailable")
 
+    if user.get("account_type") == "guest":
+        raise HTTPException(status_code=403, detail="Guest accounts cannot run analysis. Please sign up.")
+
+    # Cheap but not free — each call hits Anthropic, so throttle per user.
+    _check_analyze_throttle(user["user_id"])
+
     holdings = get_portfolio(user["user_id"])
     holding = next((h for h in holdings if h["id"] == holding_id), None)
     if not holding:
@@ -179,6 +215,11 @@ def analyze_all_holdings(market: str | None = Query(None), user=Depends(get_curr
     if account_type == "guest":
         raise HTTPException(status_code=403, detail="Guest accounts cannot run analysis. Please sign up.")
 
+    # Fetch holdings first — an empty portfolio shouldn't consume the weekly quota.
+    holdings = get_portfolio(user["user_id"], market=market.upper() if market else None)
+    if not holdings:
+        return {"ok": True, "analyzed": 0, "results": []}
+
     try:
         from src.database.models import increment_portfolio_run_count, ACCOUNT_LIMITS
         if not increment_portfolio_run_count(user["user_id"]):
@@ -189,12 +230,8 @@ def analyze_all_holdings(market: str | None = Query(None), user=Depends(get_curr
             )
     except HTTPException:
         raise
-    except Exception:
-        pass
-
-    holdings = get_portfolio(user["user_id"], market=market.upper() if market else None)
-    if not holdings:
-        return {"ok": True, "analyzed": 0, "results": []}
+    except Exception as e:
+        logger.warning("Portfolio analyze-all limit check failed for %s, allowing run: %s", user.get("user_id"), e)
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:

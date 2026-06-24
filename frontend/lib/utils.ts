@@ -5,6 +5,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Sanitize an externally-supplied URL (e.g. a news link) before using it in an
+ * href. Only http(s) links are allowed through; anything else (javascript:,
+ * data:, etc.) falls back to "#" to avoid an XSS / scheme-injection vector.
+ */
+export function safeUrl(url?: string | null): string {
+  if (!url) return "#"
+  try {
+    const u = new URL(url, "https://example.com")
+    return u.protocol === "http:" || u.protocol === "https:" ? url : "#"
+  } catch {
+    return "#"
+  }
+}
+
 /** True for NSE/BSE tickers. */
 export function isIndianTicker(ticker: string): boolean {
   const t = ticker.toUpperCase()

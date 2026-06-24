@@ -244,8 +244,16 @@ def _filter_by_size(tickers: list, market: str, size: str) -> list:
 
     for ticker in tickers:
         try:
-            info = yf.Ticker(ticker).fast_info
-            mcap = getattr(info, "market_cap", None) or 0
+            mcap = 0
+            try:
+                data = market_data_client().fundamentals(ticker).data
+                mcap = data.get("marketCap") or 0
+            except Exception:
+                pass
+            # yfinance fallback when market_data_client returns no market cap
+            if not mcap:
+                info = yf.Ticker(ticker).fast_info
+                mcap = getattr(info, "market_cap", None) or 0
             if low <= mcap <= high:
                 matched.append(ticker)
             if len(matched) >= 15:
@@ -274,30 +282,33 @@ def get_market_movers(market: str, sector: str) -> str:
 
     results = []
     tickers = seeds[:20]
+    india = market == "INDIA"
 
-    try:
-        data = yf.download(
-            tickers=" ".join(tickers),
-            period="3mo",
-            group_by="ticker",
-            auto_adjust=False,
-            progress=False,
-            threads=True,
-            timeout=15,
-        )
-
-        for ticker in tickers:
-            try:
-                hist = data[ticker] if len(tickers) > 1 else data
-                mover = _build_mover_row(ticker, hist)
-                if mover:
-                    results.append(mover)
-            except Exception:
-                continue
-    except Exception:
-        pass
+    if not india:
+        # US — bulk yf.download is efficient here (no Upstox for US)
+        try:
+            data = yf.download(
+                tickers=" ".join(tickers),
+                period="3mo",
+                group_by="ticker",
+                auto_adjust=False,
+                progress=False,
+                threads=True,
+                timeout=15,
+            )
+            for ticker in tickers:
+                try:
+                    hist = data[ticker] if len(tickers) > 1 else data
+                    mover = _build_mover_row(ticker, hist)
+                    if mover:
+                        results.append(mover)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     if not results:
+        # India primary path + US fallback: market_data_client uses Upstox for India
         client = market_data_client()
         for ticker in tickers:
             try:
