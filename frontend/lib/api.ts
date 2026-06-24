@@ -6,7 +6,7 @@
  *   const picks = await api.picks.list()
  */
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "https://stock-picker-agent.vercel.app"
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null
