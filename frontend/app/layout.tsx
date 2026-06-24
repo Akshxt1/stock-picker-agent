@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/lib/theme-provider"
 import { AuthProvider }  from "@/lib/auth-context"
 import { RunProvider }   from "@/lib/run-context"
 import AppShell          from "@/components/app-shell"
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </RunProvider>
           </AuthProvider>
         </ThemeProvider>
+        <SpeedInsights />
       </body>
     </html>
   )
