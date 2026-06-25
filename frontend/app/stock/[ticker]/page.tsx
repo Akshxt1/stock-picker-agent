@@ -559,6 +559,24 @@ const SH_COLORS = [
   "hsl(var(--muted-foreground))",   // Public
 ]
 
+// Always-visible % labels just outside each donut slice (hover tooltips alone
+// were low-contrast and hard to read). Tiny slices are dropped to avoid overlap —
+// their exact values still show in the legend and the Breakdown panel.
+function renderShareLabel(props: any) {
+  const { cx, cy, midAngle, outerRadius, percent, index } = props
+  if (percent < 0.05) return null
+  const RAD = Math.PI / 180
+  const r = outerRadius + 16
+  const x = cx + r * Math.cos(-midAngle * RAD)
+  const y = cy + r * Math.sin(-midAngle * RAD)
+  return (
+    <text x={x} y={y} fill={SH_COLORS[index % SH_COLORS.length]} fontSize={11} fontWeight={600}
+      textAnchor={x >= cx ? "start" : "end"} dominantBaseline="central">
+      {(percent * 100).toFixed(1)}%
+    </text>
+  )
+}
+
 function ShareholdingTab({ ticker }: { ticker: string }) {
   const [data, setData] = useState<ShareholdingData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -594,16 +612,24 @@ function ShareholdingTab({ ticker }: { ticker: string }) {
               Shareholding Pattern
               {latest.date && <span className="ml-1.5 text-muted-foreground font-normal text-xs">({latest.date})</span>}
             </h4>
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={pieData} cx="50%" cy="50%" innerRadius={58} outerRadius={88}
-                  paddingAngle={2} dataKey="value" nameKey="name">
-                  {pieData.map((_, i) => <Cell key={i} fill={SH_COLORS[i % SH_COLORS.length]} />)}
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                <Pie data={pieData} cx="50%" cy="48%" innerRadius={52} outerRadius={78}
+                  paddingAngle={2} dataKey="value" nameKey="name"
+                  label={renderShareLabel} labelLine={false} minAngle={4}>
+                  {pieData.map((_, i) => <Cell key={i} stroke="hsl(var(--card))" strokeWidth={2}
+                    fill={SH_COLORS[i % SH_COLORS.length]} />)}
                 </Pie>
                 <Tooltip
                   contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                  itemStyle={{ color: "hsl(var(--foreground))" }}
                   formatter={(v: any, n: any) => [`${Number(v).toFixed(2)}%`, n]} />
-                <Legend formatter={(val) => <span className="text-xs text-muted-foreground">{val}</span>} />
+                <Legend
+                  formatter={(val, entry: any) => (
+                    <span className="text-xs text-muted-foreground">
+                      {val} <span className="font-semibold text-foreground">{Number(entry?.payload?.value ?? 0).toFixed(1)}%</span>
+                    </span>
+                  )} />
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
@@ -693,12 +719,13 @@ function FinancialsTab({ ticker, currency }: { ticker: string; currency: string 
           <CardContent className="pt-4">
             <h4 className="text-sm font-semibold mb-3">Revenue &amp; PAT (Annual)</h4>
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={[...data.income].reverse()} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}
+              <BarChart data={[...data.income].reverse()} margin={{ top: 16, right: 12, left: 8, bottom: 0 }}
                 barGap={4} maxBarSize={34}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))"
                   tickFormatter={(v) => String(v).slice(-4)} />
-                <YAxis tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" width={58}
+                <YAxis tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" width={72}
+                  allowDecimals={false} domain={[0, (max: number) => max * 1.12]}
                   tickFormatter={(v) => {
                     const cr = Number(v) / 1e7
                     return cr >= 1000 ? `₹${(cr / 1000).toFixed(1)}K Cr` : `₹${Math.round(cr)} Cr`

@@ -19,7 +19,16 @@ DB_URL = os.getenv("DATABASE_URL", "sqlite:///src/database/stock_picker.db")
 if DB_URL.startswith("postgres://"):
     DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(DB_URL, echo=False)
+# pool_pre_ping recycles dead connections (managed Postgres on Railway/Supabase
+# closes idle ones, which otherwise surfaces as random "server closed the
+# connection" errors after the app has been quiet). Harmless for SQLite.
+_engine_kwargs: dict = {"echo": False, "pool_pre_ping": True}
+if DB_URL.startswith("sqlite"):
+    # FastAPI serves requests across threads; allow SQLite connections to be
+    # shared between them.
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(DB_URL, **_engine_kwargs)
 Session = sessionmaker(bind=engine)
 Base = declarative_base()
 
