@@ -7,8 +7,8 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black?style=flat-square&logo=nextdotjs)
 ![CrewAI](https://img.shields.io/badge/CrewAI-Multi--Agent-purple?style=flat-square)
-![Claude](https://img.shields.io/badge/Claude-Haiku%20%7C%20Sonnet-orange?style=flat-square)
-![Supabase](https://img.shields.io/badge/Supabase-Auth-3ECF8E?style=flat-square&logo=supabase)
+![Claude](https://img.shields.io/badge/Claude-Sonnet%20%7C%20Opus-orange?style=flat-square)
+![Railway](https://img.shields.io/badge/Railway-Postgres-0B0D0E?style=flat-square&logo=railway)
 
 ---
 
@@ -33,7 +33,10 @@ A team of 4 AI agents researches, analyses, and scores stocks across Indian and 
 | 🤖 AI Stock Picker | 4-agent CrewAI pipeline, streamed live to the UI via SSE |
 | 🔬 Deep Analysis | Run the full crew on a single stock on demand (counts toward your quota) |
 | 📈 Live Dashboard | Live NIFTY / SENSEX / S&P 500 / NASDAQ index cards, market-aware Top Movers & News (IND / US / Both) |
-| 📊 Stock Detail | Price chart + AI Analysis · Technicals · News · Events tabs (Groww/INDmoney-style) |
+| 📊 Stock Detail | Price chart · Technicals · News · Events · Shareholding Pattern · Financials · Peers tabs (Groww/INDmoney-style) |
+| 🥧 Shareholding | Donut chart with % labels, quarter-by-quarter promoter/FII/DII/Public breakdown |
+| 📉 Financials | Annual Revenue, PAT & EBITDA bar chart; key ratios (ROE, ROCE, ROA, P/E, EV/EBITDA); balance sheet snapshot |
+| 👥 Peers | Live price + P/E comparison for sector competitors |
 | 💼 Portfolio | Hero summary (value / invested / returns), per-holding live P&L & analysis, IND/US/All tabs, live ₹⇄$ FX toggle |
 | 🌍 Market Scoping | India runs stay on the India page, US on the US page — no cross-leak |
 | 🔐 Auth & Isolation | Supabase JWT login; each user sees only their own picks & portfolio |
@@ -48,14 +51,19 @@ A team of 4 AI agents researches, analyses, and scores stocks across Indian and 
 ```
 Frontend     Next.js 14 (App Router) · React · Tailwind · Radix UI · Recharts
 Backend      FastAPI · Uvicorn · Server-Sent Events (live agent stream)
-AI Agents    CrewAI + Anthropic Claude (Haiku for analysis, Sonnet for the CEO decision)
-Market Data  Finnhub (US) · yfinance (India + fallback) · TwelveData / Alpha Vantage (fallback)
+AI Agents    CrewAI + Anthropic Claude (Sonnet for analysis, Opus for the CEO decision)
+Market Data  Upstox (India — primary) · yfinance (India supplement + US fallback)
+             Finnhub (US primary) · TwelveData / Alpha Vantage (fallbacks)
              pandas-ta (technical indicators)
 Auth         Supabase (email/password, JWT)
-Database     SQLite (local) / Supabase Postgres (prod) via SQLAlchemy, with a market-data cache
+Database     SQLite (local dev) / Railway Postgres (prod) via SQLAlchemy
 ```
 
-Market data flows through a cached multi-provider layer (`src/providers/market_data.py`): **US → Finnhub → yfinance**, **India → yfinance → TwelveData → Alpha Vantage**. (IIFL's legacy API was decommissioned and removed from the chain.)
+**India data flow:** `Upstox → yfinance (Market Cap / D/E supplement) → TwelveData → Alpha Vantage`
+
+**US data flow:** `Finnhub → yfinance → TwelveData → Alpha Vantage`
+
+The provider layer (`src/providers/market_data.py`) caches responses and falls back automatically. The Upstox Analytics Token is long-lived (no daily re-auth) and supports batch quote calls (up to 500 symbols per request).
 
 ---
 
@@ -65,13 +73,14 @@ Market data flows through a cached multi-provider layer (`src/providers/market_d
 stock-picker-agent/
 ├── src/
 │   ├── api/                     # FastAPI backend
-│   │   ├── main.py              # app + router registration
+│   │   ├── main.py              # app + router registration + DB startup log
 │   │   └── routes/
 │   │       ├── auth.py          # Supabase login / current-user dependency
 │   │       ├── crew.py          # SSE: market-scan + single-stock deep analysis
-│   │       ├── stock.py         # quote / history / technicals / news / events / ai
+│   │       ├── stock.py         # quote / history / technicals / news / events /
+│   │       │                    # shareholding / financials / peers / ai
 │   │       ├── portfolio.py     # holdings + per-holding & whole-portfolio analysis
-│   │       ├── market.py        # status / indices / movers / news / fx
+│   │       ├── market.py        # status / indices / movers / news / fx / fii-dii
 │   │       ├── picks.py         # saved picks (per user)
 │   │       ├── universe.py      # sectors & sizes
 │   │       └── admin.py         # admin-only: users, usage, runs, logs
@@ -81,10 +90,11 @@ stock-picker-agent/
 │   │   └── crew.py              # orchestrator + JSON extraction + cost logging
 │   ├── tools/                   # CrewAI tools: stock data, news, technicals, discovery
 │   ├── providers/               # cached multi-provider market-data layer
+│   │   └── market_data.py       # UpstoxProvider + MarketDataClient
 │   ├── data/stock_universe.py   # sectors / cap-size buckets
 │   └── database/                # SQLAlchemy models + paper-trading logic
 ├── frontend/                    # Next.js app (app/, components/, lib/)
-├── railway.toml                 # Railway deploy (runs the FastAPI app)
+├── railway.toml                 # Railway deploy config
 ├── run_api.ps1                  # local dev: uvicorn with --reload-dir src
 └── pyproject.toml
 ```
@@ -108,10 +118,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 SUPABASE_URL=https://yourproject.supabase.co
 SUPABASE_ANON_KEY=eyJ...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...      # admin user management
+UPSTOX_ANALYTICS_TOKEN=...            # India quotes, fundamentals, news (primary)
 FINNHUB_API_KEY=...                   # US quotes/fundamentals/news
 # optional fallbacks
 TWELVE_DATA_API_KEY=...
 ALPHA_VANTAGE_API_KEY=...
+# DATABASE_URL is NOT committed — Railway injects it automatically
+# Leave unset locally to use SQLite; set to a Postgres URL for a local Postgres
 ```
 
 Run the API (Windows PowerShell helper keeps reloads scoped to `src/`):
@@ -128,7 +141,12 @@ uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir
 
 > ⚠️ Always use `--reload-dir src`. Plain `--reload` also watches `frontend/.next/`, which the Next.js dev server rewrites constantly — that thrashes the reloader and serves stale routes.
 
-API runs at `http://localhost:8000` (`/docs` for the OpenAPI UI).
+API runs at `http://localhost:8000` (`/docs` for the OpenAPI UI). The startup log line confirms which database backend is active:
+
+```
+StockPicker API started — DB backend: sqlite (host=local file)   ← local
+StockPicker API started — DB backend: postgresql (host=postgres.railway.internal)  ← Railway
+```
 
 ### 2. Frontend
 
@@ -147,7 +165,7 @@ App opens at `http://localhost:3000`. It expects the API at `http://localhost:80
 3. Authentication → Providers → enable **Email**
 4. (Local testing) Authentication → Settings → optionally disable "Confirm email"
 
-The admin account is bootstrapped by email (`akshatgupta428@gmail.com`); change `ADMIN_EMAIL` in `src/api/routes/auth.py` and `admin.py` to your own.
+The admin account is bootstrapped by email; change `ADMIN_EMAIL` in `src/api/routes/auth.py` and `admin.py` to your own.
 
 ---
 
@@ -170,7 +188,7 @@ The admin account is bootstrapped by email (`akshatgupta428@gmail.com`); change 
 1. Go to **IND Market** or **US Market** (or the Dashboard picker)
 2. Pick a Sector and Cap Size, hit **Run Analysis**
 3. Watch the 4 agents work live in the activity timeline
-4. Passing stocks render as clickable cards → open one for chart, technicals, news, events, and the AI brief
+4. Passing stocks render as clickable cards → open one for chart, technicals, news, events, shareholding, financials, and peers
 5. On any stock page, hit **Run Deep Analysis** to run the full crew on just that ticker
 
 ---
@@ -180,8 +198,16 @@ The admin account is bootstrapped by email (`akshatgupta428@gmail.com`); change 
 ```
 GET  /api/crew/stream?market=&sector=&size=     # SSE market scan
 GET  /api/crew/stock-stream?ticker=             # SSE single-stock deep analysis
-GET  /api/stock/{ticker}/quote|history|technicals|news|events|ai
-GET  /api/market/status|indices|movers|news|fx
+GET  /api/stock/{ticker}/quote
+GET  /api/stock/{ticker}/history?period=
+GET  /api/stock/{ticker}/technicals
+GET  /api/stock/{ticker}/news
+GET  /api/stock/{ticker}/events
+GET  /api/stock/{ticker}/shareholding           # promoter/FII/DII/public by quarter
+GET  /api/stock/{ticker}/financials             # income statement + ratios + balance sheet
+GET  /api/stock/{ticker}/peers                  # sector competitors with live price + P/E
+GET  /api/stock/{ticker}/ai
+GET  /api/market/status|indices|movers|news|fx|fii-dii|sector-heatmap|holidays
 GET  /api/picks?market=                         # current user's saved picks
 GET  /api/portfolio?market=                     # holdings w/ live price + P&L
 POST /api/portfolio/{id}/analyze                # quick per-holding verdict
@@ -201,17 +227,19 @@ All protected routes require a Supabase `Authorization: Bearer <jwt>` header.
 | `SUPABASE_URL` | ✅ | Supabase project URL |
 | `SUPABASE_ANON_KEY` | ✅ | Supabase anon/public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Admin user management |
+| `UPSTOX_ANALYTICS_TOKEN` | ✅ (India) | Long-lived token from Upstox Developer Apps — primary India data source |
 | `FINNHUB_API_KEY` | Recommended | US quotes, fundamentals, company news |
 | `TWELVE_DATA_API_KEY` | Optional | Quote/history fallback |
 | `ALPHA_VANTAGE_API_KEY` | Optional | Quote/history fallback |
-| `DATABASE_URL` | Optional | Postgres URL for prod (defaults to local SQLite) |
+| `DATABASE_URL` | Injected by Railway | Postgres URL for prod. **Never commit this.** Omit locally to use SQLite. If the variable resolves to an empty string, the app warns and falls back to SQLite automatically. |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated list of frontend origins for CORS (defaults to `http://localhost:3000`) |
 | `NEXT_PUBLIC_API_URL` | Optional | Frontend → API base URL (defaults to `http://localhost:8000`) |
 
 ### Provider order overrides
 
 ```env
 US_QUOTE_PROVIDER_ORDER=finnhub,yfinance,twelvedata,alphavantage
-INDIA_QUOTE_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
+INDIA_QUOTE_PROVIDER_ORDER=upstox,yfinance,twelvedata,alphavantage
 # …also *_HISTORY_PROVIDER_ORDER and *_FUNDAMENTALS_PROVIDER_ORDER
 ```
 
@@ -232,22 +260,40 @@ INDIA_QUOTE_PROVIDER_ORDER=yfinance,twelvedata,alphavantage
 
 ## Deployment
 
-The backend deploys on **Railway** (config in `railway.toml`):
+### Backend — Railway
+
+The backend deploys on **Railway** (`railway.toml`):
 
 ```toml
 [deploy]
 startCommand = "uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
 ```
 
-Set the env vars in Railway → Variables. For SQLite persistence, add a Volume mounted at `/app/src/database` (or set `DATABASE_URL` to a Supabase Postgres connection string). Deploy the `frontend/` separately (e.g. Vercel) with `NEXT_PUBLIC_API_URL` pointing at the API.
+**Database persistence:** Add a Railway **Postgres** service to your project. In your app service → Variables, add:
+
+```
+DATABASE_URL = ${{Postgres.DATABASE_URL}}
+```
+
+Railway resolves this reference automatically. The app uses `pool_pre_ping=True` to recycle stale connections on redeploy.
+
+**All other env vars** (API keys, Supabase credentials, `ALLOWED_ORIGINS`) are set in Railway → Variables. `DATABASE_URL` is **never** committed to the repo.
+
+### Frontend — Vercel (or any static host)
+
+Deploy the `frontend/` directory with:
+
+```
+NEXT_PUBLIC_API_URL=https://your-api.railway.app
+```
 
 ---
 
 ## Known Limitations
 
-- **yfinance rate limits** — the provider layer retries and falls back, but Indian data may briefly show `—` during peak hours.
-- **Finnhub free tier** — covers US fully; Indian (NSE) symbols 403, so India stays on yfinance. Finnhub daily candles are paid-tier, so history uses yfinance.
-- **SQLite on cloud** — fine locally and on Railway with a volume; for higher traffic migrate to Supabase Postgres via `DATABASE_URL`.
+- **Upstox token refresh** — the Analytics Token is long-lived but not permanent; rotate it in Railway Variables when it expires.
+- **yfinance as supplement** — Market Cap and Debt/Equity for Indian stocks come from a cached yfinance call (24h TTL). May show `—` briefly if yfinance rate-limits.
+- **Finnhub free tier** — covers US fully; Indian (NSE) symbols return 403, so India stays on Upstox/yfinance. Finnhub daily candles are paid-tier, so US history uses yfinance.
 - **Paper trading only** — no brokerage integration; prices may be ~15 min delayed.
 
 ---
