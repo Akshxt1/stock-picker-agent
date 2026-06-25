@@ -259,7 +259,7 @@ export interface StockNews {
 
 export interface StockEvents {
   ticker: string
-  dividends: Array<{ date: string; amount: number }>
+  dividends: Array<{ date: string; amount: number; label?: string | null }>
   upcoming: Array<{ label: string; date: string }>
   corporate_actions?: Array<{ type: string; label: string; date: string; details: string; upcoming: boolean }>
   dividend_rate?: number

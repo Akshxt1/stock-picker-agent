@@ -374,6 +374,10 @@ def news(ticker: str, _user=Depends(get_current_user)):
     else:
         items = _finnhub_news_items(ticker) or _yfinance_news_items(ticker)
 
+    # Sort newest-first — Google RSS / yfinance return items in mixed order, which
+    # made the list look stale (an old headline could surface at the top).
+    items.sort(key=lambda it: it.get("published") or "", reverse=True)
+
     titles = [it["title"] for it in items]
     return {"ticker": ticker, "sentiment": _score_sentiment(titles), "items": items}
 
@@ -413,19 +417,29 @@ def events(ticker: str, _user=Depends(get_current_user)):
                             parsed_date = ex_date
 
                     if name == "Dividend" and amount is not None:
+                        # event_details carries the dividend type (Final / Special /
+                        # Interim) — surface it so multiple same-date payouts are
+                        # distinguishable instead of two bare "Dividend" rows.
+                        dtype = ""
+                        for ed in (action.get("event_details") or []):
+                            if ed.get("name") == "Dividend type":
+                                dtype = str(ed.get("value") or "").strip()
+                                break
+                        div_label = f"{dtype} Dividend" if dtype else "Dividend"
                         out["dividends"].append({
                             "date":   parsed_date,
                             "amount": round(float(amount), 2),
+                            "label":  dtype or None,
                         })
                         if is_future:
                             out["upcoming"].append({
-                                "label": "Ex-Dividend Date",
+                                "label": f"Ex-Dividend ({dtype})" if dtype else "Ex-Dividend Date",
                                 "date":  parsed_date,
                             })
                         # Full history entry
                         out["corporate_actions"].append({
                             "type":    "Dividend",
-                            "label":   "Dividend",
+                            "label":   div_label,
                             "date":    parsed_date,
                             "details": f"₹{round(float(amount), 2)}/share",
                             "upcoming": is_future,
@@ -444,6 +458,30 @@ def events(ticker: str, _user=Depends(get_current_user)):
                             "upcoming": is_future,
                         })
 
+                # Upstox only returns the most recent corporate actions. Backfill
+                # older payouts from yfinance's full dividend history (skipping any
+                # ex-date Upstox already reported, to avoid double-counting the
+                # current year's Final + Special split).
+                try:
+                    import yfinance as yf
+                    seen_dates = {d["date"] for d in out["dividends"]}
+                    ydiv = yf.Ticker(ticker).dividends
+                    if ydiv is not None and len(ydiv):
+                        for idx, amt in ydiv.items():
+                            ds = str(idx)[:10]
+                            if ds in seen_dates:
+                                continue
+                            seen_dates.add(ds)
+                            entry = {"date": ds, "amount": round(float(amt), 2), "label": None}
+                            out["dividends"].append(entry)
+                            out["corporate_actions"].append({
+                                "type": "Dividend", "label": "Dividend", "date": ds,
+                                "details": f"₹{round(float(amt), 2)}/share", "upcoming": False,
+                            })
+                except Exception:
+                    pass
+
+                out["dividends"].sort(key=lambda d: d.get("date") or "", reverse=True)
                 out["dividends"] = out["dividends"][:8]
                 # Sort full history newest-first; cap at 15 entries
                 out["corporate_actions"].sort(key=lambda a: a.get("date", ""), reverse=True)
@@ -682,16 +720,32 @@ def peers(ticker: str, _user=Depends(get_current_user)):
 
         raw = upstox.competitors(ticker)
         peer_list = []
-        for p in (raw or [])[:6]:
+        seen = set()
+        for p in (raw or []):
             if not isinstance(p, dict):
                 continue
-            sym = str(p.get("ticker") or p.get("symbol") or p.get("trading_symbol") or "")
-            if sym and not sym.endswith((".NS", ".BO")):
-                sym = f"{sym}.NS"
-            name  = p.get("name") or p.get("company_name") or sym
-            price = _clean(p.get("price") or p.get("last_price"))
-            pe    = _clean(p.get("pe") or p.get("pe_ratio"))
-            peer_list.append({"ticker": sym, "name": name, "price": price, "pe": pe})
+            # New Upstox shape: peers are identified by instrument_key (NSE_EQ|ISIN).
+            ik = p.get("instrument_key")
+            resolved = upstox.peer_from_key(ik) if ik and "|" in str(ik) else None
+            if resolved:
+                sym, name = resolved["ticker"], resolved["name"]
+            else:
+                # Legacy shape fallback (symbol/name inline).
+                sym = str(p.get("ticker") or p.get("symbol") or p.get("trading_symbol") or "")
+                if sym and not sym.endswith((".NS", ".BO")):
+                    sym = f"{sym}.NS"
+                name = p.get("name") or p.get("company_name") or sym
+            if not sym or sym == ticker or sym in seen:
+                continue
+            seen.add(sym)
+            peer_list.append({
+                "ticker": sym,
+                "name": name,
+                "price": _clean(p.get("price") or p.get("last_price")),
+                "pe": _clean(p.get("pe") or p.get("pe_ratio")),
+            })
+            if len(peer_list) >= 6:
+                break
 
         missing = [p["ticker"] for p in peer_list if p["price"] is None and p["ticker"]]
         if missing:

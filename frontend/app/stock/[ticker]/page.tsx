@@ -512,7 +512,10 @@ function EventsTab({ ticker, currency }: { ticker: string; currency: string }) {
               <ul className="space-y-2">
                 {data.dividends.map((d, i) => (
                   <li key={i} className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">{d.date}</span>
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      {d.date}
+                      {d.label && <Badge variant="outline" className="text-[9px]">{d.label}</Badge>}
+                    </span>
                     <span className="font-semibold">{formatMoney(d.amount, currency)}</span>
                   </li>
                 ))}
@@ -594,12 +597,12 @@ function ShareholdingTab({ ticker }: { ticker: string }) {
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
                 <Pie data={pieData} cx="50%" cy="50%" innerRadius={58} outerRadius={88}
-                  paddingAngle={2} dataKey="value">
+                  paddingAngle={2} dataKey="value" nameKey="name">
                   {pieData.map((_, i) => <Cell key={i} fill={SH_COLORS[i % SH_COLORS.length]} />)}
                 </Pie>
                 <Tooltip
                   contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
-                  formatter={(v: any) => [`${Number(v).toFixed(2)}%`, ""]} />
+                  formatter={(v: any, n: any) => [`${Number(v).toFixed(2)}%`, n]} />
                 <Legend formatter={(val) => <span className="text-xs text-muted-foreground">{val}</span>} />
               </PieChart>
             </ResponsiveContainer>
@@ -690,12 +693,16 @@ function FinancialsTab({ ticker, currency }: { ticker: string; currency: string 
           <CardContent className="pt-4">
             <h4 className="text-sm font-semibold mb-3">Revenue &amp; PAT (Annual)</h4>
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={[...data.income].reverse()} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+              <BarChart data={[...data.income].reverse()} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}
+                barGap={4} maxBarSize={34}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))"
                   tickFormatter={(v) => String(v).slice(-4)} />
-                <YAxis tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={(v) => formatCompact(v, currency)} width={55} />
+                <YAxis tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" width={58}
+                  tickFormatter={(v) => {
+                    const cr = Number(v) / 1e7
+                    return cr >= 1000 ? `₹${(cr / 1000).toFixed(1)}K Cr` : `₹${Math.round(cr)} Cr`
+                  }} />
                 <Tooltip
                   contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
                   formatter={(v: any, name: string) => [formatCompact(Number(v), currency), name === "revenue" ? "Revenue" : "PAT"]} />

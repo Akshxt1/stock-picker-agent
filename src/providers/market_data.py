@@ -576,6 +576,8 @@ class UpstoxProvider(BaseProvider):
         self._instruments: dict[str, dict] = {}
         # response key (NSE_EQ:SYMBOL) → ticker (SYMBOL.NS)
         self._resp_to_ticker: dict[str, str] = {}
+        # instrument_key (NSE_EQ|ISIN) → ticker — built lazily for peer lookups
+        self._key_index: dict[str, str] = {}
         self._loaded_at: float = 0.0
         self._inst_lock = threading.Lock()
 
@@ -689,6 +691,17 @@ class UpstoxProvider(BaseProvider):
         if not entry or not entry.get("isin"):
             raise ProviderError(f"Upstox: no ISIN for {ticker}")
         return entry["isin"]
+
+    def peer_from_key(self, instrument_key: str) -> dict | None:
+        """Resolve a competitor's instrument_key (NSE_EQ|ISIN) to {ticker, name}."""
+        self._ensure_instruments()
+        if len(self._key_index) != len(self._instruments):
+            self._key_index = {e["instrument_key"]: t for t, e in self._instruments.items()}
+        ticker = self._key_index.get(instrument_key)
+        if not ticker:
+            return None
+        entry = self._instruments.get(ticker, {})
+        return {"ticker": ticker, "name": entry.get("name") or ticker}
 
     # ── Quotes ────────────────────────────────────────────────────────────────
 
