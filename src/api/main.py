@@ -41,8 +41,12 @@ logger = logging.getLogger("stockpicker")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from src.database.models import engine
     init_db()
-    logger.info("StockPicker API started — DB initialised")
+    # Print (not just log) so the active DB backend is always visible in Railway
+    # logs — confirms whether Postgres or the ephemeral SQLite fallback is in use.
+    print(f"StockPicker API started — DB backend: {engine.url.get_backend_name()} "
+          f"(host={engine.url.host or 'local file'})", flush=True)
     yield
 
 app = FastAPI(title="StockPicker API", version="2.0.0", lifespan=lifespan)

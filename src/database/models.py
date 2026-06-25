@@ -1,10 +1,13 @@
 # src/database/models.py
 
 import os
+import logging
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, JSON, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv, find_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Automatically hunt down the .env file and load it safely on Windows/Mac/Linux
 load_dotenv(find_dotenv())
@@ -12,8 +15,20 @@ load_dotenv(find_dotenv())
 # Email that is always granted admin (configurable; keep one source of truth).
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "akshatgupta428@gmail.com")
 
-# Read database URL from environment variable, default to local SQLite
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///src/database/stock_picker.db")
+# Read database URL from environment, default to local SQLite.
+_SQLITE_FALLBACK = "sqlite:///src/database/stock_picker.db"
+DB_URL = (os.getenv("DATABASE_URL") or "").strip()
+if not DB_URL:
+    # DATABASE_URL can be present but blank when a Railway variable reference
+    # like ${{Postgres.DATABASE_URL}} fails to resolve (wrong service name).
+    # Fall back to SQLite so the app boots instead of crash-looping — but shout
+    # about it, because on Railway that SQLite file is ephemeral and wipes.
+    if "DATABASE_URL" in os.environ:
+        logger.warning(
+            "DATABASE_URL is set but empty — your Railway/host variable reference "
+            "did not resolve. Falling back to ephemeral SQLite (data will NOT persist)."
+        )
+    DB_URL = _SQLITE_FALLBACK
 
 # If using Supabase Postgres, ensure the URL uses 'postgresql://' instead of 'postgres://'
 if DB_URL.startswith("postgres://"):
