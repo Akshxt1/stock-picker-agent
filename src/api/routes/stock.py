@@ -51,6 +51,37 @@ def _fmt_de(v) -> str | None:
     return f"{v / 100:.2f}" if isinstance(v, (int, float)) else None
 
 
+def _yf_supplement(ticker: str) -> dict:
+    """Best-effort yfinance fundamentals, cached 24h.
+
+    Upstox (our India primary) doesn't report Market Cap or Debt/Equity, so we
+    pull just those from yfinance to fill the otherwise-blank stat tiles. Kept
+    separate from the provider chain (which returns a single source) and fully
+    non-fatal — a slow/blocked yfinance call must never break the quote.
+    """
+    from src.providers.cache import get_cached, set_cached
+
+    cache_key = f"yf_supplement:{ticker}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    out: dict = {}
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).info or {}
+        out = {
+            "marketCap":    info.get("marketCap"),
+            "debtToEquity": info.get("debtToEquity"),
+        }
+    except Exception:
+        out = {}
+
+    # Cache even an empty result so we don't hammer yfinance on every page load.
+    set_cached(cache_key, "yfinance", out, 86400)
+    return out
+
+
 # ── Quote + fundamentals ──────────────────────────────────────────────────────
 
 @router.get("/{ticker}/quote")
@@ -89,6 +120,28 @@ def quote(ticker: str, _user=Depends(get_current_user)):
     except Exception as e:
         out["fundamentals_error"] = str(e)
         out.setdefault("company_name", ticker)
+
+    # Upstox key-ratios don't carry the 52-week range; derive it from 1y history
+    # (cheap — history is cached) so the stat tiles aren't blank for India tickers.
+    if out.get("fifty_two_week_high") is None or out.get("fifty_two_week_low") is None:
+        try:
+            hist = client.history(ticker, period="1y").data
+            if hist is not None and not hist.empty:
+                if out.get("fifty_two_week_high") is None:
+                    out["fifty_two_week_high"] = _clean(round(float(hist["High"].max()), 2))
+                if out.get("fifty_two_week_low") is None:
+                    out["fifty_two_week_low"] = _clean(round(float(hist["Low"].min()), 2))
+        except Exception:
+            pass
+
+    # Market Cap / Debt-to-Equity aren't in Upstox fundamentals — fill from
+    # yfinance (cached, non-fatal) so these India tiles aren't blank.
+    if _is_indian(ticker) and (out.get("market_cap") is None or out.get("debt_to_equity") is None):
+        yf_extra = _yf_supplement(ticker)
+        if out.get("market_cap") is None:
+            out["market_cap"] = _clean(yf_extra.get("marketCap"))
+        if out.get("debt_to_equity") is None:
+            out["debt_to_equity"] = _fmt_de(yf_extra.get("debtToEquity"))
 
     return out
 
@@ -453,36 +506,45 @@ def events(ticker: str, _user=Depends(get_current_user)):
 
 # ── Shareholding pattern ─────────────────────────────────────────────────────
 
+# Upstox returns shareholding category-major: a list of
+# {category, history:[{value, period}]}. Map each category onto our four buckets
+# (DII = domestic institutions = "other_dii" + "mutual_funds").
+_SHAREHOLDING_FIELD = {
+    "promoters":        "promoter",
+    "fii":              "fii",
+    "other_dii":        "dii",
+    "mutual_funds":     "dii",
+    "retail_and_other": "public",
+}
+
+
 def _parse_shareholding(raw: list) -> list[dict]:
-    """Normalize Upstox shareholding to [{date, promoter, fii, dii, public}]."""
-    quarters = []
-    for item in (raw or [])[:6]:
-        if not isinstance(item, dict):
+    """Normalize Upstox shareholding to [{date, promoter, fii, dii, public}], newest-first."""
+    periods: dict[str, dict] = {}
+    order: list[str] = []
+
+    for cat in (raw or []):
+        if not isinstance(cat, dict):
             continue
-
-        def _pct(*keys) -> float:
-            for k in keys:
-                v = item.get(k)
-                if v is not None:
-                    try:
-                        return round(float(str(v).replace("%", "").strip()), 2)
-                    except (ValueError, TypeError):
-                        pass
-            return 0.0
-
-        promoter = _pct("promoter", "promoters", "promoter_group", "promoter_holding")
-        fii      = _pct("fii", "fiis", "fii_holding", "foreign_portfolio_investor")
-        dii      = _pct("dii", "diis", "dii_holding", "mutual_fund")
-        public   = _pct("public", "retail", "public_holding", "others")
-        date     = str(item.get("date") or item.get("quarter") or item.get("as_of_date") or "")
-
-        if promoter == 0 and fii == 0 and dii == 0 and public == 0:
+        field = _SHAREHOLDING_FIELD.get(cat.get("category"))
+        if not field:
             continue
-        quarters.append({
-            "date": date, "promoter": promoter,
-            "fii": fii, "dii": dii, "public": public,
-        })
-    return quarters
+        for h in (cat.get("history") or []):
+            period = str(h.get("period") or "")
+            if not period:
+                continue
+            try:
+                val = float(h.get("value"))
+            except (TypeError, ValueError):
+                continue
+            if period not in periods:
+                periods[period] = {"date": period, "promoter": 0.0, "fii": 0.0, "dii": 0.0, "public": 0.0}
+                order.append(period)
+            periods[period][field] = round(periods[period][field] + val, 2)
+
+    quarters = [periods[p] for p in order]
+    quarters = [q for q in quarters if (q["promoter"] or q["fii"] or q["dii"] or q["public"])]
+    return quarters[:6]
 
 
 @router.get("/{ticker}/shareholding")
@@ -510,6 +572,68 @@ def _numf(v) -> float | None:
         return None
 
 
+# Upstox financials are reported in crore; multiply by 1e7 to get absolute INR
+# so the UI's compact formatter renders "₹… Cr" correctly.
+_CRORE = 10_000_000
+
+# Income statement is category-major: {income_statement:[{category, history:[{value, period}]}]}
+_INCOME_FIELD = {"revenue": "revenue", "net_profit": "pat", "operating_profit": "ebitda"}
+
+
+def _parse_income_statement(upstox, ticker: str) -> list[dict]:
+    """Pivot Upstox's category-major income statement into period rows (newest-first)."""
+    try:
+        data = upstox.income_statement(ticker)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    rows: dict[str, dict] = {}
+    order: list[str] = []
+    for cat in (data.get("income_statement") or []):
+        if not isinstance(cat, dict):
+            continue
+        field = _INCOME_FIELD.get(cat.get("category"))
+        if not field:
+            continue
+        for h in (cat.get("history") or []):
+            period = str(h.get("period") or "")
+            if not period:
+                continue
+            if period not in rows:
+                rows[period] = {"period": period, "revenue": None, "pat": None, "ebitda": None}
+                order.append(period)
+            val = _numf(h.get("value"))
+            if val is not None:
+                rows[period][field] = val * _CRORE
+
+    income = [rows[p] for p in order
+              if rows[p]["revenue"] is not None or rows[p]["pat"] is not None]
+    return income[:8]
+
+
+def _parse_balance_sheet(upstox, ticker: str) -> dict:
+    """Latest balance sheet. Upstox gives total_asset/total_liability only; derive net worth."""
+    try:
+        data = upstox.balance_sheet(ticker)
+    except Exception:
+        return {}
+    history = data.get("history") if isinstance(data, dict) else None
+    if not history or not isinstance(history[0], dict):
+        return {}
+
+    latest = history[0]
+    ta = _numf(latest.get("total_asset") or latest.get("total_assets"))
+    tl = _numf(latest.get("total_liability") or latest.get("total_liabilities"))
+    return {
+        "total_assets": ta * _CRORE if ta is not None else None,
+        "total_debt":   None,   # interest-bearing debt not reported by Upstox
+        "cash":         None,
+        "networth":     (ta - tl) * _CRORE if ta is not None and tl is not None else None,
+    }
+
+
 @router.get("/{ticker}/financials")
 def financials(ticker: str, _user=Depends(get_current_user)):
     if not _is_indian(ticker):
@@ -519,46 +643,19 @@ def financials(ticker: str, _user=Depends(get_current_user)):
         if not upstox or not upstox.available():
             return {"ticker": ticker, "income": [], "balance_sheet": {}, "ratios": {}}
 
-        income_raw = []
-        try:
-            income_raw = upstox.income_statement(ticker)
-        except Exception:
-            pass
-
-        income = []
-        for q in (income_raw or [])[:8]:
-            if not isinstance(q, dict):
-                continue
-            period  = str(q.get("date") or q.get("period") or q.get("quarter") or "")
-            revenue = _numf(q.get("revenue") or q.get("total_revenue") or q.get("net_revenue") or q.get("sales"))
-            pat     = _numf(q.get("pat") or q.get("net_profit") or q.get("profit_after_tax") or q.get("net_income"))
-            ebitda  = _numf(q.get("ebitda") or q.get("operating_profit"))
-            if period and (revenue is not None or pat is not None):
-                income.append({"period": period, "revenue": revenue, "pat": pat, "ebitda": ebitda})
-
-        bs_raw = []
-        try:
-            bs_raw = upstox.balance_sheet(ticker)
-        except Exception:
-            pass
-
-        balance: dict = {}
-        if bs_raw and isinstance(bs_raw[0], dict):
-            latest = bs_raw[0]
-            balance = {
-                "total_assets": _numf(latest.get("total_assets") or latest.get("total_asset")),
-                "total_debt":   _numf(latest.get("total_debt") or latest.get("borrowings")),
-                "cash":         _numf(latest.get("cash") or latest.get("cash_and_equivalents")),
-                "networth":     _numf(latest.get("networth") or latest.get("net_worth") or latest.get("shareholders_equity")),
-            }
+        income = _parse_income_statement(upstox, ticker)
+        balance = _parse_balance_sheet(upstox, ticker)
 
         ratios: dict = {}
         try:
             fund_data = market_data_client().fundamentals(ticker).data or {}
+            # returnOnEquity is a decimal fraction (0.1634); the UI appends "%",
+            # so scale back to a percent (16.34). ROCE/ROA are already percents.
+            _roe_frac = fund_data.get("returnOnEquity")
             ratios = {
                 "pe":       _clean(fund_data.get("trailingPE")),
                 "pb":       _clean(fund_data.get("priceToBook")),
-                "roe":      fund_data.get("returnOnEquity"),
+                "roe":      round(_roe_frac * 100, 2) if isinstance(_roe_frac, (int, float)) else None,
                 "ev_ebitda":fund_data.get("_ev_ebitda"),
                 "roce":     fund_data.get("_roce"),
                 "roa":      fund_data.get("_roa"),

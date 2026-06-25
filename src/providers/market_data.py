@@ -844,6 +844,12 @@ class UpstoxProvider(BaseProvider):
         _mcap_cr = rv.get("Market Cap") or rv.get("Mkt Cap") or rv.get("Market Capitalization")
         _mcap = float(_mcap_cr) * 10_000_000 if _mcap_cr else None
 
+        # Upstox key-ratios return ROE as a percent (16.34), but the rest of the
+        # codebase (yfinance/finnhub) expresses returnOnEquity as a decimal
+        # fraction (0.1634). Normalize so consumers can treat all providers alike.
+        _roe = rv.get("ROE")
+        _roe_frac = (_roe / 100.0) if isinstance(_roe, (int, float)) else None
+
         return {
             "shortName":        entry.get("name") or ticker,
             "longName":         entry.get("name") or ticker,
@@ -852,7 +858,7 @@ class UpstoxProvider(BaseProvider):
             "marketCap":        _mcap,
             "trailingPE":       rv.get("P/E"),
             "priceToBook":      rv.get("P/B"),
-            "returnOnEquity":   rv.get("ROE"),
+            "returnOnEquity":   _roe_frac,
             "debtToEquity":     None,
             "revenueGrowth":    None,
             "trailingEps":      None,

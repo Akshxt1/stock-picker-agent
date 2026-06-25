@@ -688,12 +688,12 @@ function FinancialsTab({ ticker, currency }: { ticker: string; currency: string 
       {data.income.length > 0 && (
         <Card className="border-border/60">
           <CardContent className="pt-4">
-            <h4 className="text-sm font-semibold mb-3">Revenue &amp; PAT (Quarterly)</h4>
+            <h4 className="text-sm font-semibold mb-3">Revenue &amp; PAT (Annual)</h4>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={[...data.income].reverse()} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={(v) => String(v).slice(-6)} />
+                  tickFormatter={(v) => String(v).slice(-4)} />
                 <YAxis tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))"
                   tickFormatter={(v) => formatCompact(v, currency)} width={55} />
                 <Tooltip
