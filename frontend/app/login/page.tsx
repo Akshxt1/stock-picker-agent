@@ -58,16 +58,15 @@ export default function LoginPage() {
 
       <div className="relative z-10 w-full max-w-sm mx-4">
         <div className="mb-8 flex justify-center">
-          <div className="rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10" style={{ width: "200px", background: "white" }}>
-            <Image
-              src="/logo.png"
-              alt="The Great Ponzi"
-              width={1536}
-              height={1024}
-              className="w-full h-auto block"
-              priority
-            />
-          </div>
+          <Image
+            src="/logo.png"
+            alt="The Great Ponzi"
+            width={1536}
+            height={1024}
+            className="h-auto"
+            style={{ width: "240px" }}
+            priority
+          />
         </div>
 
         <div className="rounded-2xl border border-border/60 bg-card/80 backdrop-blur-md p-6 shadow-2xl">

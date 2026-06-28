@@ -43,16 +43,15 @@ export default function Sidebar() {
       {/* ── Logo ── */}
       <div className="px-2 mb-5">
         <div className="flex justify-center mb-3">
-          <div className="rounded-xl overflow-hidden shadow-md ring-1 ring-border/20" style={{ width: "128px", background: "white" }}>
-            <Image
-              src="/logo.png"
-              alt="The Great Ponzi"
-              width={1536}
-              height={1024}
-              className="w-full h-auto block"
-              priority
-            />
-          </div>
+          <Image
+            src="/logo.png"
+            alt="The Great Ponzi"
+            width={1536}
+            height={1024}
+            className="h-auto"
+            style={{ width: "136px" }}
+            priority
+          />
         </div>
         {user && (
           <>
