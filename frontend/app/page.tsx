@@ -248,7 +248,7 @@ export default function Dashboard() {
               ) : news.length === 0 ? (
                 <p className="text-xs text-muted-foreground py-2">No news available.</p>
               ) : (
-                news.slice(0, 6).map((item, i) => (
+                news.slice(0, 10).map((item, i) => (
                   <a key={i} href={safeUrl(item.link)} target="_blank" rel="noopener noreferrer"
                     className="group flex flex-col gap-0.5 hover:bg-muted/40 rounded-lg p-1.5 -mx-1.5 transition-colors">
                     <p className="text-xs font-medium leading-snug line-clamp-2 group-hover:text-primary transition-colors">

@@ -43,7 +43,7 @@ _CACHE_LOCK = threading.Lock()
 _TTL = 900  # 15 minutes
 
 
-_NEWS_TTL = 300  # 5 minutes for news endpoints
+_NEWS_TTL = 180  # 3 minutes for news endpoints
 
 
 def _get(key: str):
@@ -309,14 +309,12 @@ def ticker_tape(
 _NEWS_TICKERS = {"INDIA": "^NSEI", "US": "^GSPC"}
 
 
-def _google_news_rss(query: str, limit: int = 10) -> list:
-    """Fetch latest headlines from Google News RSS (no API key, always fresh)."""
+def _parse_rss_feed(url: str, default_publisher: str = "", limit: int = 20) -> list:
+    """Parse an RSS feed and return normalised news items."""
     import urllib.parse
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
 
-    encoded = urllib.parse.quote(query)
-    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
     try:
         resp = requests.get(
             url, timeout=8,
@@ -329,11 +327,11 @@ def _google_news_rss(query: str, limit: int = 10) -> list:
             return []
         out = []
         for item in (channel.findall("item") or [])[:limit]:
-            title = item.findtext("title", "")
+            title = item.findtext("title", "").strip()
             link  = item.findtext("link", "") or ""
             pub_date = item.findtext("pubDate", "")
             source_el = item.find("source")
-            publisher = source_el.text if source_el is not None else ""
+            publisher = (source_el.text if source_el is not None else "") or default_publisher
             if not title:
                 continue
             published = ""
@@ -346,6 +344,48 @@ def _google_news_rss(query: str, limit: int = 10) -> list:
         return out
     except Exception:
         return []
+
+
+def _google_news_rss(query: str, limit: int = 10) -> list:
+    """Fetch latest headlines from Google News RSS."""
+    import urllib.parse
+    encoded = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
+    return _parse_rss_feed(url, limit=limit)
+
+
+def _india_news_multi(limit: int = 12) -> list:
+    """Fetch fresh India market news from multiple RSS sources in parallel, sorted newest-first."""
+    feeds = [
+        ("https://economictimes.indiatimes.com/markets/rss.cms",                      "Economic Times"),
+        ("https://www.moneycontrol.com/rss/latestnews.xml",                            "Moneycontrol"),
+        ("https://www.business-standard.com/rss/markets-106.rss",                     "Business Standard"),
+        ("https://www.livemint.com/rss/markets",                                       "Livemint"),
+        ("https://news.google.com/rss/search?q=NSE+Nifty+Sensex+India+stock&hl=en-IN&gl=IN&ceid=IN:en", ""),
+    ]
+
+    all_items: list = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(feeds)) as ex:
+        futures = [ex.submit(_parse_rss_feed, url, pub) for url, pub in feeds]
+        for fut in concurrent.futures.as_completed(futures, timeout=12):
+            try:
+                all_items.extend(fut.result())
+            except Exception:
+                pass
+
+    # Sort newest-first; items without a date go to the bottom
+    all_items.sort(key=lambda x: x.get("published", ""), reverse=True)
+
+    # Deduplicate by first 50 chars of title (case-insensitive)
+    seen: set = set()
+    unique: list = []
+    for item in all_items:
+        key = item["title"][:50].lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+
+    return unique[:limit]
 
 
 def _finnhub_general_news(limit: int = 10) -> list:
@@ -408,15 +448,11 @@ def market_news(market: str = Query("INDIA")):
     if m == "US":
         result = _finnhub_general_news() or _yf_index_news("^GSPC")
     elif m == "BOTH":
-        result = (
-            _google_news_rss("Indian stock market NSE Nifty", 6)
-            + _finnhub_general_news(6)
-        ) or (_yf_index_news("^NSEI", 6) + _yf_index_news("^GSPC", 6))
+        india = _india_news_multi(6)
+        us    = _finnhub_general_news(6) or _yf_index_news("^GSPC", 6)
+        result = india + us or _yf_index_news("^NSEI", 6) + _yf_index_news("^GSPC", 6)
     else:  # INDIA
-        result = (
-            _google_news_rss("Indian stock market NSE Nifty Sensex", 10)
-            or _yf_index_news("^NSEI")
-        )
+        result = _india_news_multi(12) or _yf_index_news("^NSEI")
 
     _set(cache_key, result)
     return result
