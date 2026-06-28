@@ -316,7 +316,7 @@ def _parse_rss_feed(url: str, default_publisher: str = "", limit: int = 20) -> l
     from email.utils import parsedate_to_datetime
 
     try:
-        resp = requests.get(
+        resp = _requests.get(
             url, timeout=8,
             headers={"User-Agent": "Mozilla/5.0 (compatible; StockPickerBot/1.0)"},
         )
