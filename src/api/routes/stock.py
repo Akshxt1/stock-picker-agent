@@ -328,6 +328,7 @@ def _upstox_news_items(ticker: str) -> list[dict]:
 def _yfinance_news_items(ticker: str) -> list[dict]:
     """News via yfinance — fallback for tickers not covered by Upstox/Finnhub."""
     import yfinance as yf
+    from datetime import datetime as _dt
     items = []
     try:
         raw = yf.Ticker(ticker).news or []
@@ -347,12 +348,21 @@ def _yfinance_news_items(ticker: str) -> list[dict]:
                 or (content.get("provider") or {}).get("displayName")
                 or ""
             )
-            published = content.get("pubDate") or it.get("providerPublishTime") or ""
+            # pubDate is an ISO string; providerPublishTime is a Unix timestamp (int)
+            pub_raw = content.get("pubDate") or ""
+            if not pub_raw:
+                ts = it.get("providerPublishTime")
+                if ts:
+                    try:
+                        pub_raw = _dt.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d")
+                    except Exception:
+                        pass
+            published = pub_raw[:10] if pub_raw else ""
             items.append({
                 "title": title,
                 "publisher": publisher,
                 "link": link,
-                "published": str(published)[:10] if published else "",
+                "published": published,
             })
     except Exception:
         pass
@@ -362,22 +372,33 @@ def _yfinance_news_items(ticker: str) -> list[dict]:
 @router.get("/{ticker}/news")
 def news(ticker: str, _user=Depends(get_current_user)):
     from src.tools.news_sentiment import _score_sentiment
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if _is_indian(ticker):
-        # Upstox first (direct per-instrument news), then Google RSS, then yfinance
-        items = (
-            _upstox_news_items(ticker)
-            or _google_news_rss_stock(ticker)
-            or _yfinance_news_items(ticker)
-            or _finnhub_news_items(ticker)
-        )
+        fetchers = [_upstox_news_items, _google_news_rss_stock, _yfinance_news_items]
     else:
-        items = _finnhub_news_items(ticker) or _yfinance_news_items(ticker)
+        fetchers = [_finnhub_news_items, _yfinance_news_items]
 
-    # Sort newest-first — Google RSS / yfinance return items in mixed order, which
-    # made the list look stale (an old headline could surface at the top).
-    items.sort(key=lambda it: it.get("published") or "", reverse=True)
+    # Fetch all sources in parallel so a slow/failing source doesn't block the rest
+    all_items: list[dict] = []
+    with ThreadPoolExecutor(max_workers=len(fetchers)) as pool:
+        futures = {pool.submit(f, ticker): f for f in fetchers}
+        for fut in as_completed(futures):
+            try:
+                all_items.extend(fut.result() or [])
+            except Exception:
+                pass
 
+    # Deduplicate by lowercased title prefix then sort newest-first
+    seen: set[str] = set()
+    items: list[dict] = []
+    for it in sorted(all_items, key=lambda x: x.get("published") or "", reverse=True):
+        key = (it.get("title") or "")[:60].lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            items.append(it)
+
+    items = items[:25]
     titles = [it["title"] for it in items]
     return {"ticker": ticker, "sentiment": _score_sentiment(titles), "items": items}
 
