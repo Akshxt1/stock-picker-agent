@@ -8,9 +8,10 @@ export const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL ?? "akshatgupta42
 export type AccountType = "admin" | "premium" | "trial" | "guest"
 
 export interface ExtendedUser extends AuthUser {
-  account_type: AccountType
-  weekly_runs:  number
-  limits:       { crew_runs: number; portfolio_runs: number }
+  account_type:       AccountType
+  weekly_runs:        number
+  limits:             { crew_runs: number; portfolio_runs: number }
+  notification_email?: string | null
 }
 
 interface AuthContextValue {
@@ -22,13 +23,14 @@ interface AuthContextValue {
   loginAsGuest:   () => void
   logout:         () => void
   forgotPassword: (email: string) => Promise<void>
+  updateUser:     (updates: Partial<ExtendedUser>) => void
   loading:        boolean
 }
 
 const AuthContext = createContext<AuthContextValue>({
   user: null, token: null, isGuest: false, isAdmin: false,
   login: async () => {}, loginAsGuest: () => {}, logout: () => {},
-  forgotPassword: async () => {}, loading: true,
+  forgotPassword: async () => {}, updateUser: () => {}, loading: true,
 })
 
 const GUEST_USER: ExtendedUser = {
@@ -89,8 +91,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await api.auth.forgotPassword(email)
   }
 
+  function updateUser(updates: Partial<ExtendedUser>) {
+    setUser(prev => prev ? { ...prev, ...updates } : null)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, isGuest, isAdmin, login, loginAsGuest, logout, forgotPassword, loading }}>
+    <AuthContext.Provider value={{ user, token, isGuest, isAdmin, login, loginAsGuest, logout, forgotPassword, updateUser, loading }}>
       {children}
     </AuthContext.Provider>
   )

@@ -64,6 +64,10 @@ class ForgotPasswordRequest(BaseModel):
 class UpdateAccountTypeRequest(BaseModel):
     account_type: str
 
+class UpdateProfileRequest(BaseModel):
+    username: str | None = None
+    notification_email: str | None = None
+
 
 # ── Dependency ────────────────────────────────────────────────────────────────
 
@@ -91,13 +95,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer
             profile = {"account_type": "trial", "weekly_runs": 0,
                        "limits": {"crew_runs": 2, "portfolio_runs": 3}}
         return {
-            "user_id":      user.id,
-            "email":        user.email,
-            "name":         (user.user_metadata or {}).get("username") or user.email.split("@")[0],
-            "account_type": profile["account_type"],
-            "weekly_runs":  profile["weekly_runs"],
+            "user_id":           user.id,
+            "email":             user.email,
+            "name":              profile.get("username") or (user.user_metadata or {}).get("username") or user.email.split("@")[0],
+            "notification_email": profile.get("notification_email"),
+            "account_type":      profile["account_type"],
+            "weekly_runs":       profile["weekly_runs"],
             "weekly_portfolio_runs": profile.get("weekly_portfolio_runs", 0),
-            "limits":       profile["limits"],
+            "limits":            profile["limits"],
         }
     except HTTPException:
         raise
@@ -118,6 +123,7 @@ def login(body: LoginRequest):
             {"email": body.email, "password": body.password}
         )
         user = resp.user
+        profile = None
         try:
             from src.database.models import upsert_user_profile
             profile = upsert_user_profile(
@@ -134,12 +140,13 @@ def login(body: LoginRequest):
         return {
             "access_token": resp.session.access_token,
             "user": {
-                "user_id":      user.id,
-                "email":        user.email,
-                "name":         (user.user_metadata or {}).get("username") or user.email.split("@")[0],
-                "account_type": account_type,
-                "weekly_runs":  weekly_runs,
-                "limits":       limits,
+                "user_id":           user.id,
+                "email":             user.email,
+                "name":              (profile or {}).get("username") or (user.user_metadata or {}).get("username") or user.email.split("@")[0],
+                "notification_email": (profile or {}).get("notification_email"),
+                "account_type":      account_type,
+                "weekly_runs":       weekly_runs,
+                "limits":            limits,
             },
         }
     except Exception as e:
@@ -186,3 +193,41 @@ def forgot_password(body: ForgotPasswordRequest):
         # Log but always return success so we don't reveal which emails are registered.
         logger.warning("Password reset failed for %s: %s", body.email, e)
     return {"message": "If that email is registered, a password reset link has been sent."}
+
+
+@router.patch("/profile")
+def update_profile(body: UpdateProfileRequest, user=Depends(get_current_user)):
+    try:
+        from src.database.models import update_username, update_notification_email
+        result = {}
+        if body.username is not None:
+            username = body.username.strip()
+            if not username:
+                raise HTTPException(status_code=400, detail="Username cannot be empty.")
+            if len(username) > 50:
+                raise HTTPException(status_code=400, detail="Username must be 50 characters or fewer.")
+            update_username(user["user_id"], username)
+            result["name"] = username
+        if body.notification_email is not None:
+            ne = body.notification_email.strip()
+            if ne and "@" not in ne:
+                raise HTTPException(status_code=400, detail="Invalid notification email address.")
+            update_notification_email(user["user_id"], ne)
+            result["notification_email"] = ne or None
+        return {**result, "email": user["email"], "user_id": user["user_id"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Failed to update profile: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update profile.")
+
+
+@router.delete("/picks/all")
+def clear_picks(user=Depends(get_current_user)):
+    try:
+        from src.database.models import clear_user_picks
+        count = clear_user_picks(user["user_id"])
+        return {"ok": True, "deleted": count}
+    except Exception as e:
+        logger.warning("Failed to clear picks: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to clear history.")

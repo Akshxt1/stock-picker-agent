@@ -1,5 +1,7 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
+import type { Pick } from "@/lib/api"
+import type { AppSettings } from "@/lib/settings-context"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -37,6 +39,62 @@ export function formatMoney(value?: number | null, currency: string = "INR"): st
   const sym = currencySymbol(currency)
   const locale = currency === "INR" ? "en-IN" : "en-US"
   return `${sym}${value.toLocaleString(locale, { maximumFractionDigits: 2 })}`
+}
+
+/** Parse a confidence string like "85%", "85", or 85 into a number 0–100. */
+function parseConfidence(raw?: string | number | null): number {
+  if (raw == null) return 0
+  return parseFloat(raw.toString().replace("%", "").trim()) || 0
+}
+
+/**
+ * Filter, sort, and optionally cap a list of picks according to AppSettings.
+ * Pass `capToNumPicks = true` only for live run results (not saved history).
+ */
+export function applyPickSettings(
+  picks: Pick[],
+  settings: AppSettings,
+  capToNumPicks = false,
+): Pick[] {
+  let result = [...picks]
+
+  // Confidence threshold
+  if (settings.minConfidence > 0) {
+    result = result.filter(p => parseConfidence(p.confidence) >= settings.minConfidence)
+  }
+
+  // Risk tolerance
+  if (settings.riskTolerance !== "aggressive") {
+    result = result.filter(p => {
+      const sig = (p.technical_signal || p.recommendation || "").toUpperCase()
+      if (settings.riskTolerance === "conservative") return sig.includes("STRONG") && sig.includes("BUY")
+      // moderate: any buy/bull signal
+      return sig.includes("BUY") || sig.includes("BULL")
+    })
+  }
+
+  // Sort
+  switch (settings.defaultSortOrder) {
+    case "confidence":
+      result.sort((a, b) => parseConfidence(b.confidence) - parseConfidence(a.confidence))
+      break
+    case "sector":
+      result.sort((a, b) => (a.sector || "").localeCompare(b.sector || ""))
+      break
+    case "date":
+      result.sort((a, b) => (b.analysis_date || "").localeCompare(a.analysis_date || ""))
+      break
+    case "price":
+      result.sort((a, b) => (b.current_price ?? 0) - (a.current_price ?? 0))
+      break
+  }
+
+  // Cap to defaultNumPicks (only for run results)
+  if (capToNumPicks && settings.defaultNumPicks > 0) {
+    result = result.slice(0, settings.defaultNumPicks)
+  }
+
+  return result
 }
 
 /** Compact display of a large number (market cap). */

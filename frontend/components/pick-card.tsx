@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import AddToPortfolio from "@/components/add-to-portfolio"
 import { TrendingUp, TrendingDown, ChevronRight, CalendarDays } from "lucide-react"
 import { formatMoney } from "@/lib/utils"
+import { useSettings } from "@/lib/settings-context"
 
 function Metric({ label, value }: { label: string; value?: string | number | null }) {
   return (
@@ -16,14 +17,63 @@ function Metric({ label, value }: { label: string; value?: string | number | nul
   )
 }
 
-export default function PickCard({ pick }: { pick: Pick }) {
+interface PickCardProps {
+  pick: Pick
+  viewMode?: "expanded" | "compact"
+}
+
+export default function PickCard({ pick, viewMode }: PickCardProps) {
   const router = useRouter()
+  const { settings } = useSettings()
+  const mode = viewMode ?? settings.cardViewMode
+
   const isBuy = (pick.recommendation || pick.technical_signal || "").toUpperCase().includes("BULL")
     || (pick.recommendation || "").toUpperCase() === "BUY"
   const conf = (pick.confidence || "").toString()
 
   const go = () => router.push(`/stock/${encodeURIComponent(pick.ticker)}`)
 
+  // ── Compact mode ───────────────────────────────────────────────────────────
+  if (mode === "compact") {
+    return (
+      <div
+        onClick={go}
+        role="button"
+        className="group flex items-center gap-3 cursor-pointer rounded-lg border border-border/60 bg-card px-4 py-2.5 transition-all hover:border-primary/40 hover:shadow-md"
+      >
+        {/* Ticker + company */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono font-bold text-sm">{pick.ticker}</span>
+            <ChevronRight className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+          </div>
+          <p className="truncate text-[11px] text-muted-foreground">{pick.company_name || "—"}</p>
+        </div>
+
+        {/* Sector + signal */}
+        <div className="hidden sm:flex items-center gap-2 shrink-0">
+          <span className="text-[11px] text-muted-foreground">{pick.sector || "—"}</span>
+          <Badge variant={isBuy ? "success" : "warning"} className="text-[10px] font-bold gap-1">
+            {isBuy ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
+            {pick.recommendation || pick.technical_signal || "—"}
+          </Badge>
+        </div>
+
+        {/* Confidence + price + actions */}
+        <div className="flex items-center gap-3 shrink-0">
+          {conf && <span className="text-[11px] text-muted-foreground hidden md:inline">{conf}</span>}
+          <span className="font-semibold text-sm">
+            {formatMoney(pick.current_price, pick.currency || "INR")}
+          </span>
+          <div onClick={e => e.stopPropagation()}>
+            <AddToPortfolio ticker={pick.ticker} defaultPrice={pick.current_price} currency={pick.currency} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Expanded mode (default) ────────────────────────────────────────────────
   return (
     <div
       onClick={go}
@@ -47,7 +97,9 @@ export default function PickCard({ pick }: { pick: Pick }) {
 
       {/* Price + confidence */}
       <div className="mt-3 flex items-end justify-between">
-        <span className="text-lg font-bold">{formatMoney(pick.current_price, pick.currency || "INR")}</span>
+        <span className="text-lg font-bold">
+          {formatMoney(pick.current_price, pick.currency || "INR")}
+        </span>
         {conf && (
           <span className="text-[11px] text-muted-foreground">
             Confidence <span className="font-semibold text-foreground">{conf}</span>
@@ -57,10 +109,10 @@ export default function PickCard({ pick }: { pick: Pick }) {
 
       {/* Fundamentals */}
       <div className="mt-3 grid grid-cols-4 gap-2 border-t border-border/40 pt-3">
-        <Metric label="ROE" value={pick.roe} />
-        <Metric label="D/E" value={pick.debt_to_equity} />
+        <Metric label="ROE"  value={pick.roe} />
+        <Metric label="D/E"  value={pick.debt_to_equity} />
         <Metric label="Rev↑" value={pick.revenue_growth} />
-        <Metric label="P/E" value={pick.pe_ratio} />
+        <Metric label="P/E"  value={pick.pe_ratio} />
       </div>
 
       {/* Footer */}

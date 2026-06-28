@@ -187,6 +187,7 @@ class UserProfile(Base):
     user_id = Column(String, unique=True, nullable=False)   # Supabase auth UUID
     username = Column(String, nullable=True)
     email = Column(String, nullable=True)
+    notification_email = Column(String, nullable=True)      # separate email for alerts
     account_type = Column(String, default="trial")          # 'admin', 'premium', 'trial', 'guest'
     weekly_runs  = Column(Integer, default=0)               # crew (market scan) runs this week
     weekly_portfolio_runs = Column(Integer, default=0)     # deep/portfolio analysis runs this week
@@ -230,6 +231,7 @@ def _migrate_add_columns():
         },
         "user_profiles": {
             "weekly_portfolio_runs": "INTEGER DEFAULT 0",
+            "notification_email": "VARCHAR",
         },
     }
 
@@ -444,7 +446,8 @@ def upsert_user_profile(user_id: str, email: str = None, username: str = None) -
                 profile.weekly_portfolio_runs = 0
                 profile.week_start  = week_start
             if email:    profile.email    = email
-            if username: profile.username = username
+            # Only set username from Supabase metadata if not already set locally
+            if username and not profile.username: profile.username = username
             profile.last_seen = datetime.now(timezone.utc)
             # Always enforce admin for the admin email, even if DB had old value
             if email == ADMIN_EMAIL:
@@ -457,14 +460,50 @@ def upsert_user_profile(user_id: str, email: str = None, username: str = None) -
         sess.commit()
         sess.refresh(profile)
         return {
-            "user_id":      profile.user_id,
-            "email":        profile.email,
-            "username":     profile.username,
-            "account_type": profile.account_type,
-            "weekly_runs":  profile.weekly_runs,
+            "user_id":           profile.user_id,
+            "email":             profile.email,
+            "username":          profile.username,
+            "notification_email": profile.notification_email,
+            "account_type":      profile.account_type,
+            "weekly_runs":       profile.weekly_runs,
             "weekly_portfolio_runs": profile.weekly_portfolio_runs or 0,
-            "limits":       ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"]),
+            "limits":            ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"]),
         }
+
+
+def update_username(user_id: str, username: str) -> dict:
+    """Update a user's display name in the local DB."""
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            raise ValueError(f"User {user_id} not found")
+        profile.username = username
+        sess.commit()
+        sess.refresh(profile)
+        return {"user_id": profile.user_id, "username": profile.username, "email": profile.email}
+
+
+def update_notification_email(user_id: str, notification_email: str) -> dict:
+    """Update a user's separate notification email."""
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if not profile:
+            raise ValueError(f"User {user_id} not found")
+        profile.notification_email = notification_email or None
+        sess.commit()
+        sess.refresh(profile)
+        return {"user_id": profile.user_id, "notification_email": profile.notification_email}
+
+
+def clear_user_picks(user_id: str) -> int:
+    """Delete all picks for a user. Returns the number of rows deleted."""
+    with Session() as sess:
+        rows = sess.query(Pick).filter(Pick.run_by_user_id == user_id).all()
+        count = len(rows)
+        for row in rows:
+            sess.delete(row)
+        sess.commit()
+        return count
 
 
 def increment_run_count(user_id: str) -> bool:

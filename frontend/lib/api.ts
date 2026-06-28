@@ -35,12 +35,13 @@ async function request<T>(
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface AuthUser {
-  user_id:      string
-  email:        string
-  name:         string
-  account_type: string
-  weekly_runs:  number
-  limits:       { crew_runs: number; portfolio_runs: number }
+  user_id:            string
+  email:              string
+  name:               string
+  account_type:       string
+  weekly_runs:        number
+  limits:             { crew_runs: number; portfolio_runs: number }
+  notification_email?: string | null
 }
 
 export const auth = {
@@ -63,6 +64,15 @@ export const auth = {
       method: "POST",
       body: JSON.stringify({ email }),
     }),
+
+  updateProfile: (fields: { username?: string; notification_email?: string }) =>
+    request<{ name?: string; notification_email?: string; email: string; user_id: string }>("/api/auth/profile", {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    }),
+
+  clearPicks: () =>
+    request<{ ok: boolean; deleted: number }>("/api/auth/picks/all", { method: "DELETE" }),
 }
 
 // ── Picks ─────────────────────────────────────────────────────────────────────

@@ -13,8 +13,9 @@ import PickCard      from "@/components/pick-card"
 import {
   Bot, AlertCircle,
   CheckCircle2, Loader2, Play, Square, Sparkles, RotateCcw,
+  SlidersHorizontal,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn, applyPickSettings } from "@/lib/utils"
 
 const MARKETS = ["INDIA", "US"]
 
@@ -30,21 +31,27 @@ export default function AgentStream({ lockedMarket }: { lockedMarket?: string } 
   const [sizes,   setSizes]   = useState<string[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const atLimit   = !isGuest && user?.limits && user.limits.crew_runs < 9999
+  const atLimit = !isGuest && user?.limits && user.limits.crew_runs < 9999
     && (user.weekly_runs ?? 0) >= user.limits.crew_runs
 
-  // When a market is locked (India/US page), only surface picks if the LAST RUN
-  // was for that same market. Gating on the run's market (not each pick's field)
-  // is bulletproof — an India run never leaks onto the US page and vice-versa.
   const runMarket = state.params?.market
-  const visiblePicks = lockedMarket
-    ? (runMarket === lockedMarket
-        ? state.picks.filter(p => !p.market || p.market === lockedMarket)
-        : [])
+  const rawPicks = lockedMarket
+    ? (runMarket === lockedMarket ? state.picks.filter(p => !p.market || p.market === lockedMarket) : [])
     : state.picks
 
+  // Apply settings filters + sort + cap to run results
+  const visiblePicks = applyPickSettings(rawPicks, settings, true)
+  const filtered = rawPicks.length > visiblePicks.length
+
   useEffect(() => {
-    universe.sectors(market).then(s => { setSectors(s); if (!state.params) setSector(s[0] ?? "") })
+    universe.sectors(market).then(s => {
+      setSectors(s)
+      if (!state.params) {
+        // Pre-select first sector that matches user's defaultSectors preference
+        const preferred = settings.defaultSectors.find(d => s.includes(d))
+        setSector(preferred ?? s[0] ?? "")
+      }
+    })
     universe.sizes(market).then(s => {
       setSizes(s)
       if (!state.params) {
@@ -165,13 +172,19 @@ export default function AgentStream({ lockedMarket }: { lockedMarket?: string } 
       )}
 
       {/* ── Results ── */}
-      {visiblePicks.length > 0 && (
+      {rawPicks.length > 0 && (
         <Card className="border-border/60 overflow-hidden">
           <div className="h-0.5 w-full bg-gradient-to-r from-accent via-emerald-400 to-transparent" />
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
               <CheckCircle2 className="h-5 w-5 text-accent" />
               {visiblePicks.length} Pick{visiblePicks.length !== 1 ? "s" : ""} Found
+              {filtered && (
+                <span className="flex items-center gap-1 text-[10px] font-normal text-muted-foreground ml-1">
+                  <SlidersHorizontal className="h-3 w-3" />
+                  {rawPicks.length - visiblePicks.length} filtered by settings
+                </span>
+              )}
               <Badge variant="outline" className="ml-auto text-[10px]">
                 {state.params?.market} · {state.params?.sector} · {state.params?.size}
               </Badge>
@@ -179,9 +192,18 @@ export default function AgentStream({ lockedMarket }: { lockedMarket?: string } 
           </CardHeader>
           <CardContent>
             <p className="mb-3 text-xs text-muted-foreground">Tap a card for the full chart, AI analysis, technicals, news &amp; events.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className={cn(
+              settings.cardViewMode === "compact"
+                ? "flex flex-col gap-1.5"
+                : "grid grid-cols-1 sm:grid-cols-2 gap-3"
+            )}>
               {visiblePicks.map((p, i) => <PickCard key={p.id ?? i} pick={p} />)}
             </div>
+            {visiblePicks.length === 0 && rawPicks.length > 0 && (
+              <p className="text-xs text-muted-foreground py-3 text-center">
+                All picks filtered out by your Analysis settings (confidence threshold or risk tolerance).
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -232,7 +254,6 @@ function ActivityRow({ line }: { line: { type: string; agent?: string; text: str
     )
   }
 
-  // step: tool / thought / answer
   return (
     <div className="flex gap-2.5 pl-1">
       <div className="flex flex-col items-center pt-1">
