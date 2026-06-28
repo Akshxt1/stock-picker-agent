@@ -5,7 +5,8 @@ import { useAuth }  from "@/lib/auth-context"
 import { api }      from "@/lib/api"
 import { Input }    from "@/components/ui/input"
 import { Button }   from "@/components/ui/button"
-import { Loader2, TrendingUp, Eye, KeyRound, ArrowLeft, CheckCircle2, UserPlus } from "lucide-react"
+import Image from "next/image"
+import { Loader2, Eye, KeyRound, ArrowLeft, CheckCircle2, UserPlus } from "lucide-react"
 
 type View = "login" | "signup" | "forgot" | "forgot-sent" | "signup-sent"
 
@@ -56,12 +57,16 @@ export default function LoginPage() {
       </div>
 
       <div className="relative z-10 w-full max-w-sm mx-4">
-        <div className="mb-8 text-center">
-          <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 border border-primary/20 mb-4">
-            <TrendingUp className="h-7 w-7 text-primary" />
-          </div>
-          <h1 className="text-2xl font-bold gradient-text">The Great Ponzi</h1>
-          <p className="mt-1 text-sm text-muted-foreground">AI-powered stock analysis</p>
+        <div className="mb-8 flex justify-center">
+          <Image
+            src="/logo.png"
+            alt="The Great Ponzi"
+            width={1536}
+            height={1024}
+            className="h-auto"
+            style={{ width: "260px" }}
+            priority
+          />
         </div>
 
         <div className="rounded-2xl border border-border/60 bg-card/80 backdrop-blur-md p-6 shadow-2xl">

@@ -1,6 +1,7 @@
 "use client"
 
 import Link           from "next/link"
+import Image          from "next/image"
 import { usePathname } from "next/navigation"
 import { cn }          from "@/lib/utils"
 import { useAuth }     from "@/lib/auth-context"
@@ -41,12 +42,19 @@ export default function Sidebar() {
 
       {/* ── Logo ── */}
       <div className="px-2 mb-5">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 border border-primary/20">
-            <TrendingUp className="h-3.5 w-3.5 text-primary" />
-          </div>
-          <span className="font-bold text-sm gradient-text">The Great Ponzi</span>
+        {/* Bull graphic – text portion clipped so name label below isn't duplicated */}
+        <div className="overflow-hidden rounded-xl mb-2" style={{ maxHeight: "80px" }}>
+          <Image
+            src="/logo.png"
+            alt="The Great Ponzi"
+            width={1536}
+            height={1024}
+            className="w-full h-auto block"
+            priority
+          />
         </div>
+        <span className="font-bold text-sm gradient-text px-0.5">The Great Ponzi</span>
+        <div className="mb-1" />
         {user && (
           <>
             <p className="text-[11px] text-muted-foreground truncate pl-0.5">
