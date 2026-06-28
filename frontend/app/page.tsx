@@ -41,12 +41,11 @@ export default function Dashboard() {
   const [fiiDii,        setFiiDii]        = useState<FiiDiiFlow[]>([])
   const [sectors,       setSectors]       = useState<SectorHeat[]>([])
   const [mkt,           setMkt]           = useState<"INDIA" | "US" | "BOTH">("INDIA")
-  const [idxGroup,      setIdxGroup]      = useState<"india" | "us">("india")
 
   useEffect(() => {
     market.status().then(s => {
       setStatus(s)
-      if (s?.NSE?.open && s?.NYSE?.open)    setMkt("BOTH")
+      if (s?.NSE?.open && s?.NYSE?.open) setMkt("BOTH")
       else if (s?.NYSE?.open && !s?.NSE?.open) setMkt("US")
       else setMkt("INDIA")
     }).catch(() => {})
@@ -56,10 +55,6 @@ export default function Dashboard() {
     market.fiiDii().then(setFiiDii).catch(() => {})
     market.sectorHeatmap().then(d => setSectors(d.sectors ?? [])).catch(() => {})
   }, [])
-
-  useEffect(() => {
-    setIdxGroup(mkt === "US" ? "us" : "india")
-  }, [mkt])
 
   useEffect(() => {
     setNewsLoading(true); setMoversLoading(true)
@@ -76,8 +71,10 @@ export default function Dashboard() {
   // Next holiday
   const nextHoliday = holidays[0]
 
-  // Filter indices by selected group tab
-  const visibleIndices = indices.filter(ix => (ix as any).group === idxGroup || !(ix as any).group)
+  // Filter indices by selected market
+  const visibleIndices = mkt === "BOTH"
+    ? indices
+    : indices.filter(ix => (ix as any).group === (mkt === "US" ? "us" : "india") || !(ix as any).group)
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -134,12 +131,12 @@ export default function Dashboard() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-muted-foreground">Live Indices</h2>
           <div className="flex gap-1 rounded-lg bg-muted/50 p-0.5">
-            {(["india", "us"] as const).map(g => (
-              <button key={g} onClick={() => setIdxGroup(g)}
+            {(["INDIA", "US", "BOTH"] as const).map(m => (
+              <button key={m} onClick={() => setMkt(m)}
                 className={`rounded-md px-3 py-1 text-xs font-semibold transition-all ${
-                  idxGroup === g ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                  mkt === m ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}>
-                {g === "india" ? "🇮🇳 India" : "🇺🇸 US"}
+                {m === "INDIA" ? "🇮🇳 India" : m === "US" ? "🇺🇸 US" : "🌐 Both"}
               </button>
             ))}
           </div>
@@ -162,7 +159,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Smart money (FII/DII) + Sector heatmap (India) ── */}
-      {idxGroup === "india" && (fiiDii.length > 0 || sectors.length > 0) && (
+      {mkt !== "US" && (fiiDii.length > 0 || sectors.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* FII/DII flows */}
           {fiiDii.length > 0 && (
@@ -209,20 +206,6 @@ export default function Dashboard() {
 
         {/* Right: News + Movers (2/5) */}
         <div className="lg:col-span-2 space-y-4">
-
-          {/* Market toggle */}
-          <div className="flex items-center justify-end">
-            <div className="flex gap-1 rounded-lg bg-muted/50 p-0.5">
-              {(["INDIA", "US", "BOTH"] as const).map(m => (
-                <button key={m} onClick={() => setMkt(m)}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-all ${
-                    mkt === m ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
-                  }`}>
-                  {m === "INDIA" ? "🇮🇳 IND" : m === "US" ? "🇺🇸 US" : "🌐 Both"}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {/* Movers */}
           <Card className="border-border/60">
