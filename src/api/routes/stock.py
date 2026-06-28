@@ -235,14 +235,29 @@ def technicals(ticker: str, _user=Depends(get_current_user)):
 
 # ── News ──────────────────────────────────────────────────────────────────────
 
-def _google_news_rss_stock(ticker: str, limit: int = 10) -> list[dict]:
-    """Google News RSS search for a specific stock (no API key, always fresh)."""
+def _company_name(ticker: str) -> str:
+    """Return the full company name for a ticker (used for better news search queries)."""
+    try:
+        upstox = market_data_client().providers.get("upstox")
+        if upstox and upstox.available():
+            upstox._ensure_instruments()
+            entry = upstox._instruments.get(ticker, {})
+            name = entry.get("name", "")
+            if name:
+                # Normalise: "TATA TECHNOLOGIES LTD" → "Tata Technologies"
+                # Keep it short enough for a clean search query
+                return name.title().replace(" Ltd", "").replace(" Limited", "").strip()
+    except Exception:
+        pass
+    return ticker.split(".")[0]
+
+
+def _google_news_rss_items(query: str, limit: int = 10) -> list[dict]:
+    """Fetch Google News RSS for an arbitrary search query."""
     import urllib.parse
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
 
-    base = ticker.split(".")[0]  # strip .NS / .BO
-    query = f"{base} NSE stock India" if _is_indian(ticker) else f"{base} stock"
     encoded = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded}&hl=en-IN&gl=IN&ceid=IN:en"
     try:
@@ -275,6 +290,28 @@ def _google_news_rss_stock(ticker: str, limit: int = 10) -> list[dict]:
         return out
     except Exception:
         return []
+
+
+def _google_news_rss_stock(ticker: str, limit: int = 10) -> list[dict]:
+    """Google News RSS — searches by company name AND ticker for maximum freshness."""
+    base = ticker.split(".")[0]  # strip .NS / .BO
+    company = _company_name(ticker)
+
+    if _is_indian(ticker):
+        # Primary: company name (most articles use "Tata Technologies", not "TATATECH")
+        primary_query = f'"{company}" NSE India stock'
+        # Secondary: ticker-based for any articles that do use the symbol
+        secondary_query = f"{base} NSE stock India"
+    else:
+        primary_query = f'"{company}" stock'
+        secondary_query = f"{base} stock"
+
+    items = _google_news_rss_items(primary_query, limit)
+    # If primary gives few results, supplement with ticker-based query
+    if len(items) < 5:
+        items += _google_news_rss_items(secondary_query, limit)
+    return items
+
 
 
 def _finnhub_news_items(ticker: str) -> list[dict]:
