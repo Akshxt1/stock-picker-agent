@@ -9,12 +9,12 @@ from src.providers import market_data_client
 
 def _fmt_pct(v) -> str:
     """Convert yfinance decimal fraction to percentage string (0.21 → '21.00%')."""
-    return f"{v * 100:.2f}%" if isinstance(v, (int, float)) else str(v)
+    return f"{v * 100:.2f}%" if isinstance(v, (int, float)) else "N/A"
 
 
 def _fmt_de(v) -> str:
     """Convert yfinance debtToEquity (ratio×100) to plain ratio string (335.5 → '3.36')."""
-    return f"{v / 100:.2f}" if isinstance(v, (int, float)) else str(v)
+    return f"{v / 100:.2f}" if isinstance(v, (int, float)) else "N/A"
 
 
 @tool("Get Stock Data")
@@ -37,7 +37,7 @@ def get_stock_data(ticker: str) -> str:
         name       = info.get("shortName", ticker)
         sector     = info.get("sector", "Unknown")
         industry   = info.get("industry", "Unknown")
-        market_cap = info.get("marketCap", "Unknown")
+        market_cap = info.get("marketCap") or "Unknown"
         pe         = info.get("trailingPE", "N/A")
         pb         = info.get("priceToBook", "N/A")
         roe        = info.get("returnOnEquity", "N/A")

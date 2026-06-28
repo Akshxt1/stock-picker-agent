@@ -854,7 +854,8 @@ class UpstoxProvider(BaseProvider):
         }
 
         # Market Cap is in Crores (1 Cr = 10,000,000 INR); convert to absolute INR
-        _mcap_cr = rv.get("Market Cap") or rv.get("Mkt Cap") or rv.get("Market Capitalization")
+        _mcap_cr = (rv.get("Market Cap") or rv.get("Mkt Cap")
+                    or rv.get("Market Capitalization") or rv.get("Market Cap (Cr)"))
         _mcap = float(_mcap_cr) * 10_000_000 if _mcap_cr else None
 
         # Upstox key-ratios return ROE as a percent (16.34), but the rest of the
@@ -862,6 +863,70 @@ class UpstoxProvider(BaseProvider):
         # fraction (0.1634). Normalize so consumers can treat all providers alike.
         _roe = rv.get("ROE")
         _roe_frac = (_roe / 100.0) if isinstance(_roe, (int, float)) else None
+
+        # D/E — Upstox may surface it under several names in key-ratios
+        _de_raw = (rv.get("Debt to Equity") or rv.get("D/E Ratio")
+                   or rv.get("Debt/Equity") or rv.get("Total Debt/Equity")
+                   or rv.get("D/E") or rv.get("Debt-to-Equity"))
+        # Upstox returns D/E as a plain ratio (1.23); yfinance uses ratio×100.
+        # Multiply by 100 here so the shared _fmt_de() in stock_data.py divides back.
+        _de = float(_de_raw) * 100.0 if isinstance(_de_raw, (int, float)) else None
+
+        # Revenue growth — try key-ratios first, then compute from income statement
+        _rev_growth_raw = (rv.get("Revenue Growth") or rv.get("Sales Growth")
+                           or rv.get("Revenue Growth (%)") or rv.get("Growth in Revenue"))
+        _rev_growth: float | None = None
+        if isinstance(_rev_growth_raw, (int, float)):
+            # Upstox returns as percent (15.0); normalise to decimal fraction (0.15)
+            _rev_growth = _rev_growth_raw / 100.0
+        else:
+            # Fall back to computing YoY growth from the income statement
+            try:
+                stmt = requests.get(
+                    f"{self._BASE}/fundamentals/{isin}/income-statement",
+                    headers=hdrs, timeout=12,
+                )
+                if stmt.ok:
+                    rows = stmt.json().get("data") or []
+                    # Rows are typically newest-first; look for two consecutive revenue values
+                    revenues: list[float] = []
+                    for row in rows:
+                        for key in ("Revenue", "Net Revenue", "Total Revenue",
+                                    "Net Sales", "Total Income", "Revenue from Operations"):
+                            val = _num(row.get(key))
+                            if val is not None and val > 0:
+                                revenues.append(val)
+                                break
+                    if len(revenues) >= 2:
+                        _rev_growth = (revenues[0] - revenues[1]) / revenues[1]
+            except Exception:
+                pass
+
+        # D/E fallback: compute from balance sheet if key-ratios didn't have it
+        if _de is None:
+            try:
+                bs = requests.get(
+                    f"{self._BASE}/fundamentals/{isin}/balance-sheet",
+                    headers=hdrs, timeout=12,
+                )
+                if bs.ok:
+                    rows = bs.json().get("data") or []
+                    if rows:
+                        latest = rows[0]
+                        # Try common field names for total debt and equity
+                        _total_debt = _num(
+                            latest.get("Total Debt") or latest.get("Total Borrowings")
+                            or latest.get("Long Term Borrowings")
+                        )
+                        _total_equity = _num(
+                            latest.get("Total Equity") or latest.get("Shareholders Equity")
+                            or latest.get("Net Worth") or latest.get("Stockholders Equity")
+                        )
+                        if _total_debt is not None and _total_equity and _total_equity > 0:
+                            # Store as ratio×100 to match yfinance convention used by _fmt_de()
+                            _de = (_total_debt / _total_equity) * 100.0
+            except Exception:
+                pass
 
         return {
             "shortName":        entry.get("name") or ticker,
@@ -872,8 +937,8 @@ class UpstoxProvider(BaseProvider):
             "trailingPE":       rv.get("P/E"),
             "priceToBook":      rv.get("P/B"),
             "returnOnEquity":   _roe_frac,
-            "debtToEquity":     None,
-            "revenueGrowth":    None,
+            "debtToEquity":     _de,
+            "revenueGrowth":    _rev_growth,
             "trailingEps":      None,
             "fiftyTwoWeekHigh": None,
             "fiftyTwoWeekLow":  None,
@@ -1102,11 +1167,17 @@ class MarketDataClient:
                 errors.append(f"{name}: {exc}")
         raise ProviderError("; ".join(errors) or f"No quote provider available for {ticker}")
 
+    # Fields the agents need for filtering; supplement from yfinance when missing.
+    _CRITICAL_FIELDS = ("marketCap", "debtToEquity", "revenueGrowth",
+                        "returnOnEquity", "trailingPE", "fiftyTwoWeekHigh", "fiftyTwoWeekLow")
+
     def fundamentals(self, ticker: str, ttl_seconds: int = 86400) -> ProviderResult:
         cache_key = f"fundamentals:{ticker}"
         cached = get_cached(cache_key)
         if cached:
-            return ProviderResult(cached.get("source", "cache"), cached)
+            # If cached data is missing critical fields, fall through to re-fetch.
+            if not any(cached.get(k) is None for k in self._CRITICAL_FIELDS):
+                return ProviderResult(cached.get("source", "cache"), cached)
 
         errors = []
         for name in self._order(ticker, "FUNDAMENTALS"):
@@ -1115,9 +1186,24 @@ class MarketDataClient:
                 continue
             try:
                 data = provider.fundamentals(ticker)
-                payload = {"source": provider.name, **data}
-                set_cached(cache_key, provider.name, payload, ttl_seconds)
-                return ProviderResult(provider.name, payload)
+
+                # If critical fields are still missing, silently fill from yfinance.
+                missing = [k for k in self._CRITICAL_FIELDS if data.get(k) is None]
+                source_label = provider.name
+                if missing and provider.name != "yfinance":
+                    yf: YFinanceProvider = self.providers["yfinance"]  # always available
+                    try:
+                        yf_data = yf.fundamentals(ticker)
+                        for key in missing:
+                            if yf_data.get(key) is not None:
+                                data[key] = yf_data[key]
+                        source_label = f"{provider.name}+yfinance"
+                    except Exception:
+                        pass
+
+                payload = {"source": source_label, **data}
+                set_cached(cache_key, source_label, payload, ttl_seconds)
+                return ProviderResult(source_label, payload)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
         raise ProviderError("; ".join(errors) or f"No fundamentals provider available for {ticker}")
