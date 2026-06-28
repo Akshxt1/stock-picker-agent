@@ -12,6 +12,11 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title:       "The Great Ponzi",
   description: "AI-powered stock analysis — India & US markets",
+  icons: {
+    icon:     "/logo-icon.png",
+    shortcut: "/logo-icon.png",
+    apple:    "/logo-icon.png",
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -42,25 +42,24 @@ export default function Sidebar() {
 
       {/* ── Logo ── */}
       <div className="px-2 mb-5">
-        {/* Bull graphic – text portion clipped so name label below isn't duplicated */}
-        <div className="overflow-hidden rounded-xl mb-2" style={{ maxHeight: "80px" }}>
-          <Image
-            src="/logo.png"
-            alt="The Great Ponzi"
-            width={1536}
-            height={1024}
-            className="w-full h-auto block"
-            priority
-          />
+        <div className="flex justify-center mb-3">
+          <div className="rounded-xl overflow-hidden shadow-md ring-1 ring-border/20" style={{ width: "128px", background: "white" }}>
+            <Image
+              src="/logo.png"
+              alt="The Great Ponzi"
+              width={1536}
+              height={1024}
+              className="w-full h-auto block"
+              priority
+            />
+          </div>
         </div>
-        <span className="font-bold text-sm gradient-text px-0.5">The Great Ponzi</span>
-        <div className="mb-1" />
         {user && (
           <>
-            <p className="text-[11px] text-muted-foreground truncate pl-0.5">
+            <p className="text-[11px] text-muted-foreground truncate text-center">
               {isGuest ? "Viewing as guest" : (user.name || user.email)}
             </p>
-            <div className="mt-1.5 flex items-center gap-1.5">
+            <div className="mt-1.5 flex items-center justify-center gap-1.5">
               <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${badge.cls}`}>
                 {badge.label}
               </span>
