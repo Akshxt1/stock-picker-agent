@@ -355,13 +355,23 @@ def _google_news_rss(query: str, limit: int = 10) -> list:
 
 
 def _india_news_multi(limit: int = 12) -> list:
-    """Fetch fresh India market news from multiple RSS sources in parallel, sorted newest-first."""
+    """Fetch fresh India market news from multiple RSS sources in parallel, sorted newest-first.
+
+    Tested sources (2026-06-28):
+      Livemint markets      → works, returns today's news
+      Google News RSS       → works, returns ~3 day old news
+      ET Markets            → returns HTML (broken RSS) - SKIP
+      Moneycontrol          → returns 2-year-old stale data  - SKIP
+      Business Standard     → returns malformed XML          - SKIP
+    """
     feeds = [
-        ("https://economictimes.indiatimes.com/markets/rss.cms",                      "Economic Times"),
-        ("https://www.moneycontrol.com/rss/latestnews.xml",                            "Moneycontrol"),
-        ("https://www.business-standard.com/rss/markets-106.rss",                     "Business Standard"),
-        ("https://www.livemint.com/rss/markets",                                       "Livemint"),
-        ("https://news.google.com/rss/search?q=NSE+Nifty+Sensex+India+stock&hl=en-IN&gl=IN&ceid=IN:en", ""),
+        ("https://www.livemint.com/rss/markets",
+         "Livemint"),
+        ("https://news.google.com/rss/search?q=NSE+Nifty+Sensex+India+stock+market&hl=en-IN&gl=IN&ceid=IN:en",
+         ""),
+        # Extra Google News queries for breadth
+        ("https://news.google.com/rss/search?q=BSE+Sensex+Nifty+today&hl=en-IN&gl=IN&ceid=IN:en",
+         ""),
     ]
 
     all_items: list = []
