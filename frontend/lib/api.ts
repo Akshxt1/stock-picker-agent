@@ -192,9 +192,21 @@ export const market = {
 
 // ── Universe ──────────────────────────────────────────────────────────────────
 
+export interface StockSearchResult {
+  ticker:       string
+  company_name: string
+  sector:       string
+  size:         string
+  market:       string
+}
+
 export const universe = {
   sectors: (market: string) => request<string[]>(`/api/universe/sectors?market=${market}`),
   sizes:   (market: string) => request<string[]>(`/api/universe/sizes?market=${market}`),
+  search:  (q: string, market: string) =>
+    request<StockSearchResult[]>(
+      `/api/universe/search?q=${encodeURIComponent(q)}&market=${market}`
+    ),
 }
 
 // ── FX ────────────────────────────────────────────────────────────────────────

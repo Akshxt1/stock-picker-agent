@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import AgentStream from "@/components/agent-stream"
 import PickCard from "@/components/pick-card"
+import StockSearch from "@/components/stock-search"
 import { picks as picksApi, type Pick } from "@/lib/api"
 import { useRun } from "@/lib/run-context"
 import { History, Loader2 } from "lucide-react"
@@ -23,9 +24,12 @@ export default function IndiaPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold mb-1">India Markets</h2>
-        <p className="text-muted-foreground text-sm">NSE-listed stocks · SEBI market cap definitions</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold mb-1">India Markets</h2>
+          <p className="text-muted-foreground text-sm">NSE-listed stocks · SEBI market cap definitions</p>
+        </div>
+        <StockSearch market="INDIA" />
       </div>
 
       <AgentStream lockedMarket="INDIA" />
