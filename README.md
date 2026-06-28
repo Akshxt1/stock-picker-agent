@@ -7,7 +7,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?style=flat-square&logo=fastapi)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black?style=flat-square&logo=nextdotjs)
 ![CrewAI](https://img.shields.io/badge/CrewAI-Multi--Agent-purple?style=flat-square)
-![Claude](https://img.shields.io/badge/Claude-Sonnet%20%7C%20Opus-orange?style=flat-square)
+![Claude](https://img.shields.io/badge/Claude-Sonnet%204.6%20%7C%20Opus%204.8-orange?style=flat-square)
 ![Railway](https://img.shields.io/badge/Railway-Postgres-0B0D0E?style=flat-square&logo=railway)
 
 ---
@@ -33,11 +33,14 @@ A team of 4 AI agents researches, analyses, and scores stocks across Indian and 
 | 🤖 AI Stock Picker | 4-agent CrewAI pipeline, streamed live to the UI via SSE |
 | 🔬 Deep Analysis | Run the full crew on a single stock on demand (counts toward your quota) |
 | 📈 Live Dashboard | Live NIFTY / SENSEX / S&P 500 / NASDAQ index cards, market-aware Top Movers & News (IND / US / Both) |
+| 🔍 Stock Search | Debounced autocomplete search across the full IND/US universe — type a ticker or company name, jump straight to its detail page |
 | 📊 Stock Detail | Price chart · Technicals · News · Events · Shareholding Pattern · Financials · Peers tabs (Groww/INDmoney-style) |
 | 🥧 Shareholding | Donut chart with % labels, quarter-by-quarter promoter/FII/DII/Public breakdown |
 | 📉 Financials | Annual Revenue, PAT & EBITDA bar chart; key ratios (ROE, ROCE, ROA, P/E, EV/EBITDA); balance sheet snapshot |
 | 👥 Peers | Live price + P/E comparison for sector competitors |
 | 💼 Portfolio | Hero summary (value / invested / returns), per-holding live P&L & analysis, IND/US/All tabs, live ₹⇄$ FX toggle |
+| 🎛 Pick Filtering | Picks on the India/US pages are filtered and sorted by your Analysis settings (confidence level, risk tolerance, sector, sort order) in real time |
+| ⚙️ User Settings | Full settings page — Account (username, notification email), Appearance (dark/light + 4 accent colours), Analysis (risk tolerance + preferred sectors), Display (card layout, sort order), Plan & Usage |
 | 🌍 Market Scoping | India runs stay on the India page, US on the US page — no cross-leak |
 | 🔐 Auth & Isolation | Supabase JWT login; each user sees only their own picks & portfolio |
 | 🧾 Run Attribution + Dedup | Picks tagged with who ran them; same-combo same-day runs replace rather than duplicate |
@@ -208,10 +211,12 @@ GET  /api/stock/{ticker}/financials             # income statement + ratios + ba
 GET  /api/stock/{ticker}/peers                  # sector competitors with live price + P/E
 GET  /api/stock/{ticker}/ai
 GET  /api/market/status|indices|movers|news|fx|fii-dii|sector-heatmap|holidays
+GET  /api/universe/search?q=&market=            # stock search autocomplete (IND / US)
 GET  /api/picks?market=                         # current user's saved picks
 GET  /api/portfolio?market=                     # holdings w/ live price + P&L
 POST /api/portfolio/{id}/analyze                # quick per-holding verdict
 POST /api/portfolio/analyze-all                 # analyze whole portfolio (1 quota run)
+PATCH /api/auth/profile                         # update username / notification email
 GET  /api/admin/users|usage|runs|logs           # admin only
 ```
 
@@ -249,7 +254,7 @@ INDIA_QUOTE_PROVIDER_ORDER=upstox,yfinance,twelvedata,alphavantage
 
 | Table | Purpose |
 |---|---|
-| `user_profiles` | Mirrors Supabase auth; account_type + weekly run counters |
+| `user_profiles` | Mirrors Supabase auth; account_type, weekly run counters, username, notification_email |
 | `picks` | AI-generated recommendations (per user, with attribution) |
 | `portfolio` | Paper-trading positions + saved per-holding analysis |
 | `transactions` | Buy/sell history |
