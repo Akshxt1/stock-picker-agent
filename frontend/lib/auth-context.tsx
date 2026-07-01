@@ -12,6 +12,7 @@ export interface ExtendedUser extends AuthUser {
   weekly_runs:        number
   limits:             { crew_runs: number; portfolio_runs: number }
   notification_email?: string | null
+  tutorial_seen?:     boolean
 }
 
 interface AuthContextValue {

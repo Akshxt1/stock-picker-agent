@@ -65,8 +65,8 @@ export const auth = {
       body: JSON.stringify({ email }),
     }),
 
-  updateProfile: (fields: { username?: string; notification_email?: string }) =>
-    request<{ name?: string; notification_email?: string; email: string; user_id: string }>("/api/auth/profile", {
+  updateProfile: (fields: { username?: string; notification_email?: string; tutorial_seen?: boolean }) =>
+    request<{ name?: string; notification_email?: string; tutorial_seen?: boolean; email: string; user_id: string }>("/api/auth/profile", {
       method: "PATCH",
       body: JSON.stringify(fields),
     }),

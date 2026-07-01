@@ -67,6 +67,7 @@ class UpdateAccountTypeRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     username: str | None = None
     notification_email: str | None = None
+    tutorial_seen: bool | None = None
 
 
 # ── Dependency ────────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer
             "account_type":      profile["account_type"],
             "weekly_runs":       profile["weekly_runs"],
             "weekly_portfolio_runs": profile.get("weekly_portfolio_runs", 0),
+            "tutorial_seen":     profile.get("tutorial_seen", False),
             "limits":            profile["limits"],
         }
     except HTTPException:
@@ -146,6 +148,7 @@ def login(body: LoginRequest):
                 "notification_email": (profile or {}).get("notification_email"),
                 "account_type":      account_type,
                 "weekly_runs":       weekly_runs,
+                "tutorial_seen":     (profile or {}).get("tutorial_seen", False),
                 "limits":            limits,
             },
         }
@@ -198,7 +201,7 @@ def forgot_password(body: ForgotPasswordRequest):
 @router.patch("/profile")
 def update_profile(body: UpdateProfileRequest, user=Depends(get_current_user)):
     try:
-        from src.database.models import update_username, update_notification_email
+        from src.database.models import update_username, update_notification_email, update_tutorial_seen
         result = {}
         if body.username is not None:
             username = body.username.strip()
@@ -214,6 +217,9 @@ def update_profile(body: UpdateProfileRequest, user=Depends(get_current_user)):
                 raise HTTPException(status_code=400, detail="Invalid notification email address.")
             update_notification_email(user["user_id"], ne)
             result["notification_email"] = ne or None
+        if body.tutorial_seen is not None:
+            update_tutorial_seen(user["user_id"], body.tutorial_seen)
+            result["tutorial_seen"] = body.tutorial_seen
         return {**result, "email": user["email"], "user_id": user["user_id"]}
     except HTTPException:
         raise

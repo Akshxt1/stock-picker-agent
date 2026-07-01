@@ -194,6 +194,7 @@ class UserProfile(Base):
     week_start   = Column(String, nullable=True)            # ISO date of current week start
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_seen = Column(DateTime, nullable=True)
+    tutorial_seen = Column(Boolean, default=False)
 
 # ─── Initialization ───────────────────────────────────────────────────────────
 
@@ -232,6 +233,7 @@ def _migrate_add_columns():
         "user_profiles": {
             "weekly_portfolio_runs": "INTEGER DEFAULT 0",
             "notification_email": "VARCHAR",
+            "tutorial_seen": "BOOLEAN DEFAULT FALSE",
         },
     }
 
@@ -467,6 +469,7 @@ def upsert_user_profile(user_id: str, email: str = None, username: str = None) -
             "account_type":      profile.account_type,
             "weekly_runs":       profile.weekly_runs,
             "weekly_portfolio_runs": profile.weekly_portfolio_runs or 0,
+            "tutorial_seen":     bool(profile.tutorial_seen),
             "limits":            ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"]),
         }
 
@@ -493,6 +496,15 @@ def update_notification_email(user_id: str, notification_email: str) -> dict:
         sess.commit()
         sess.refresh(profile)
         return {"user_id": profile.user_id, "notification_email": profile.notification_email}
+
+
+def update_tutorial_seen(user_id: str, seen: bool) -> None:
+    """Mark that the user has completed the onboarding tutorial."""
+    with Session() as sess:
+        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if profile:
+            profile.tutorial_seen = seen
+            sess.commit()
 
 
 def clear_user_picks(user_id: str) -> int:
