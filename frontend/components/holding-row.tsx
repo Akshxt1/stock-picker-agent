@@ -34,7 +34,9 @@ export default function HoldingRow({ holding: h, displayCurrency, convert, onCha
   const invested = buy != null ? buy * h.quantity : null
   const value    = current != null ? current * h.quantity : null
   const pnlAmt   = (value != null && invested != null) ? value - invested : null
-  const pnlPct   = h.pnl_pct
+  const pnlPct   = invested != null && invested > 0 && pnlAmt != null
+    ? (pnlAmt / invested) * 100
+    : h.pnl_pct
   const up       = (pnlPct ?? 0) >= 0
 
   const target  = convert(h.target_price ?? verdict?.target_price ?? null, native)
@@ -72,7 +74,7 @@ export default function HoldingRow({ holding: h, displayCurrency, convert, onCha
               {reco && <Badge variant={RECO_VARIANT[reco] ?? "outline"} className="text-[9px]">{reco.replace("_", " ")}</Badge>}
             </div>
             <p className="truncate text-[11px] text-muted-foreground">
-              {h.quantity} qty · avg {formatMoney(buy, displayCurrency)}
+              {+h.quantity.toPrecision(8)} qty · avg {formatMoney(buy, displayCurrency)}
             </p>
           </div>
           <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -99,7 +101,8 @@ export default function HoldingRow({ holding: h, displayCurrency, convert, onCha
       {/* Expanded detail */}
       {open && (
         <div className="border-t border-border/50 px-4 py-3 space-y-3">
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="grid grid-cols-4 gap-2 text-center">
+            <Stat label="Avg Cost" value={formatMoney(buy, displayCurrency)} />
             <Stat label="LTP" value={formatMoney(current, displayCurrency)} />
             <Stat label="Invested" value={formatMoney(invested, displayCurrency)} />
             <Stat label="P/E" value={h.pe_ratio != null ? String(h.pe_ratio) : "—"} />

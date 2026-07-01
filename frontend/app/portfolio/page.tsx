@@ -46,10 +46,12 @@ export default function PortfolioPage() {
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
-    if (!ticker || !qty || !price) return
+    const parsedQty = parseFloat(qty)
+    const parsedPrice = parseFloat(price)
+    if (!ticker || !qty || !price || parsedQty <= 0 || parsedPrice <= 0 || isNaN(parsedQty) || isNaN(parsedPrice)) return
     setAdding(true)
     try {
-      await portfolio.add(normalizeTicker(ticker, market), parseFloat(qty), parseFloat(price))
+      await portfolio.add(normalizeTicker(ticker, market), parsedQty, parsedPrice)
       setTicker(""); setQty(""); setPrice(""); setShowAdd(false)
       await load()
     } finally { setAdding(false) }
@@ -132,11 +134,26 @@ export default function PortfolioPage() {
               {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Add
             </Button>
           </form>
-          {market === "INDIA" && ticker && !isIndianTicker(ticker) && (
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              Will be saved as <span className="font-mono text-foreground">{ticker.toUpperCase()}.NS</span> (NSE)
-            </p>
-          )}
+          {(() => {
+            const parsedQty = parseFloat(qty)
+            const parsedPrice = parseFloat(price)
+            const totalCost = !isNaN(parsedQty) && !isNaN(parsedPrice) && parsedQty > 0 && parsedPrice > 0
+              ? parsedQty * parsedPrice : null
+            return totalCost != null ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Total cost: <span className="font-semibold text-foreground">
+                  {market === "INDIA" ? "₹" : "$"}{totalCost.toLocaleString(market === "INDIA" ? "en-IN" : "en-US", { maximumFractionDigits: 2 })}
+                </span>
+                {market === "INDIA" && ticker && !isIndianTicker(ticker) && (
+                  <> · will be saved as <span className="font-mono text-foreground">{ticker.toUpperCase()}.NS</span> (NSE)</>
+                )}
+              </p>
+            ) : market === "INDIA" && ticker && !isIndianTicker(ticker) ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Will be saved as <span className="font-mono text-foreground">{ticker.toUpperCase()}.NS</span> (NSE)
+              </p>
+            ) : null
+          })()}
         </div>
       )}
 
