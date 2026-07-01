@@ -41,6 +41,7 @@ A team of 4 AI agents researches, analyses, and scores stocks across Indian and 
 | 💼 Portfolio | Hero summary (value / invested / returns), per-holding live P&L & analysis, IND/US/All tabs, live ₹⇄$ FX toggle |
 | 🎛 Pick Filtering | Picks on the India/US pages are filtered and sorted by your Analysis settings (confidence level, risk tolerance, sector, sort order) in real time |
 | ⚙️ User Settings | Full settings page — Account (username, notification email), Appearance (dark/light + 4 accent colours), Analysis (risk tolerance + preferred sectors), Display (card layout, sort order), Plan & Usage |
+| 🎓 Onboarding Tutorial | 6-step guided modal shown once per account on first login — persisted in Postgres so it never repeats on a different device |
 | 🌍 Market Scoping | India runs stay on the India page, US on the US page — no cross-leak |
 | 🔐 Auth & Isolation | Supabase JWT login; each user sees only their own picks & portfolio |
 | 🧾 Run Attribution + Dedup | Picks tagged with who ran them; same-combo same-day runs replace rather than duplicate |
@@ -216,7 +217,7 @@ GET  /api/picks?market=                         # current user's saved picks
 GET  /api/portfolio?market=                     # holdings w/ live price + P&L
 POST /api/portfolio/{id}/analyze                # quick per-holding verdict
 POST /api/portfolio/analyze-all                 # analyze whole portfolio (1 quota run)
-PATCH /api/auth/profile                         # update username / notification email
+PATCH /api/auth/profile                         # update username / notification_email / tutorial_seen
 GET  /api/admin/users|usage|runs|logs           # admin only
 ```
 
@@ -254,7 +255,7 @@ INDIA_QUOTE_PROVIDER_ORDER=upstox,yfinance,twelvedata,alphavantage
 
 | Table | Purpose |
 |---|---|
-| `user_profiles` | Mirrors Supabase auth; account_type, weekly run counters, username, notification_email |
+| `user_profiles` | Mirrors Supabase auth; account_type, weekly run counters, username, notification_email, tutorial_seen |
 | `picks` | AI-generated recommendations (per user, with attribution) |
 | `portfolio` | Paper-trading positions + saved per-holding analysis |
 | `transactions` | Buy/sell history |
