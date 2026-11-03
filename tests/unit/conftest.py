@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_db_dir}/test.db"
 os.environ["APP_ENV"] = "development"
 os.environ["RATE_LIMIT_ENABLED"] = "false"
 os.environ["JOB_WORKER_MODE"] = "external"
+os.environ["PROVIDER_MONITOR"] = "false"
 
 import pytest
 

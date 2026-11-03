@@ -23,6 +23,7 @@ from src.api.routes.market    import router as market_router
 from src.api.routes.universe  import router as universe_router
 from src.api.routes.admin     import router as admin_router
 from src.api.routes.stock     import router as stock_router
+from src.api.routes.assets    import router as assets_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -43,9 +44,15 @@ async def lifespan(app: FastAPI):
     if os.getenv("JOB_WORKER_MODE", "embedded").lower() == "embedded":
         from src.jobs.worker import start_embedded_workers
         stop_workers = start_embedded_workers()
+    stop_monitor = None
+    if os.getenv("PROVIDER_MONITOR", "true").lower() not in ("0", "false", "no"):
+        from src.providers.health import start_monitor
+        stop_monitor = start_monitor()
     yield
     if stop_workers:
         stop_workers.set()
+    if stop_monitor:
+        stop_monitor.set()
 
 app = FastAPI(title="StockPicker API", version="2.1.0", lifespan=lifespan)
 
@@ -81,6 +88,7 @@ app.include_router(market_router,    prefix="/api/market")
 app.include_router(universe_router,  prefix="/api/universe")
 app.include_router(admin_router,     prefix="/api/admin")
 app.include_router(stock_router,     prefix="/api/stock")
+app.include_router(assets_router,    prefix="/api/assets")
 
 
 @app.get("/")
@@ -96,7 +104,11 @@ def health():
 
 @app.get("/ready")
 def ready():
-    """Readiness: the DB answers and the job queue is readable."""
+    """Readiness: the DB answers and the job queue is readable.
+
+    Data providers are reported but never fail readiness (the app falls back to other
+    sources); `data_status` turns "degraded" when e.g. the Upstox token is dead.
+    """
     from sqlalchemy import text, func
     from src.database.models import Session, Job
     try:
@@ -106,4 +118,7 @@ def ready():
     except Exception as e:
         logger.error("readiness check failed: %s", e)
         return JSONResponse({"status": "unavailable"}, status_code=503)
-    return {"status": "ready", "queued_jobs": queued}
+    from src.providers.health import provider_health, overall
+    providers = provider_health()
+    return {"status": "ready", "queued_jobs": queued,
+            "data_status": overall(providers), "providers": providers}

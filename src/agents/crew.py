@@ -1,6 +1,6 @@
 # src/agents/crew.py
 
-import json, re, time
+import json, re
 from datetime import datetime
 from crewai import Crew, Process
 from src.agents.tasks import create_tasks, create_single_stock_tasks
@@ -161,37 +161,3 @@ def _extract_json(text: str) -> dict | None:
             pass
 
     return None
-
-
-def run_full_market_scan(market: str, sectors=None, sizes=None,
-                         user_id=None, username=None) -> list:
-    # Import sector/size helpers — stock_universe.py can still hold these
-    # even though it no longer provides per-sector ticker lists
-    try:
-        from src.data.stock_universe import get_all_sectors, get_all_sizes
-        sectors = sectors or get_all_sectors(market)
-        sizes   = sizes   or get_all_sizes(market)
-    except ImportError:
-        sectors = sectors or ["Technology", "Banking", "Pharma", "FMCG", "Auto"]
-        sizes   = sizes   or ["Large", "Mid", "Small"]
-
-    results = []
-    total   = len(sectors) * len(sizes)
-    count   = 0
-
-    for sector in sectors:
-        for size in sizes:
-            count += 1
-            print(f"\n  [{count}/{total}] {market} · {sector} · {size}")
-            res = run_stock_picker(
-                market, sector, size,
-                user_id=user_id, username=username,
-            )
-            results.append(res)
-
-            # Rate-limit between crew runs to protect Anthropic token bucket
-            if count < total:
-                print("  [rate limit] Sleeping 10s before next run...")
-                time.sleep(10)
-
-    return results

@@ -8,6 +8,7 @@ import json
 import logging
 import logging.handlers
 import os
+from collections import deque
 from pathlib import Path
 
 
@@ -24,8 +25,30 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(data)
 
 
+class RingBufferHandler(logging.Handler):
+    """Keeps the last N formatted log lines in memory so the admin page can show recent
+    logs even where there is no log file (containers, ephemeral disks)."""
+
+    def __init__(self, capacity: int = 1000):
+        super().__init__()
+        self.lines: deque[str] = deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.lines.append(self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
+_ring = RingBufferHandler()
+
+
+def recent_logs(n: int = 100) -> list[str]:
+    return list(_ring.lines)[-n:]
+
+
 def configure_logging() -> None:
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    handlers: list[logging.Handler] = [logging.StreamHandler(), _ring]
     if os.getenv("LOG_TO_FILE", "").lower() in ("1", "true", "yes"):
         log_dir = Path(__file__).parents[2] / "logs"
         log_dir.mkdir(exist_ok=True)

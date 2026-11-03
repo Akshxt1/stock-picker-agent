@@ -15,7 +15,7 @@ import threading
 import concurrent.futures
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.api.routes.auth import get_current_user
 
@@ -59,32 +59,42 @@ router = APIRouter()
 
 
 class AddPositionRequest(BaseModel):
-    ticker:   str
-    quantity: float
-    buy_price: float
+    ticker:   str                      # canonical symbol: AAPL, RELIANCE.NS, CRYPTO:bitcoin, MF:118989
+    quantity: float = Field(gt=0)
+    buy_price: float = Field(gt=0)
+    asset_class: str | None = None     # only needed for US funds/ETFs (FUND); inferred otherwise
+    name: str | None = Field(default=None, max_length=120)   # display name for funds/coins
 
 
 # ── live enrichment ───────────────────────────────────────────────────────────
 
+def _price_ctx(holding: dict) -> float | None:
+    """Live price for any asset class, in the holding's native currency."""
+    from src.assets import service
+    from src.assets.types import parse_symbol
+    ref = parse_symbol(holding["ticker"], holding.get("asset_class"))
+    return float(service.quote(ref)["price"])
+
+
 def _enrich(holding: dict) -> dict:
-    """Attach live current price, P&L %, and P/E to a holding (cached quote)."""
-    from src.providers import market_data_client
-    client = market_data_client()
+    """Attach live current price, P&L %, and (equities) P/E to a holding."""
     ticker = holding["ticker"]
     try:
-        price = float(client.quote(ticker).data["price"])
-        holding["current_price"] = round(price, 2)
+        price = _price_ctx(holding)
+        holding["current_price"] = round(price, 8 if price < 1 else 2)
         buy = holding.get("buy_price")
         if buy:
             holding["pnl_pct"] = round((price - buy) / buy * 100, 2)
     except Exception:
         pass
-    try:
-        pe = client.fundamentals(ticker).data.get("trailingPE")
-        if isinstance(pe, (int, float)):
-            holding["pe_ratio"] = round(float(pe), 2)
-    except Exception:
-        pass
+    if holding.get("asset_class", "EQUITY") == "EQUITY":
+        try:
+            from src.providers import market_data_client
+            pe = market_data_client().fundamentals(ticker).data.get("trailingPE")
+            if isinstance(pe, (int, float)):
+                holding["pe_ratio"] = round(float(pe), 2)
+        except Exception:
+            pass
     return holding
 
 
@@ -118,8 +128,12 @@ def add_position(body: AddPositionRequest, user=Depends(get_current_user)):
             quantity  = body.quantity,
             buy_price = body.buy_price,
             username  = user.get("username") or user.get("email"),
+            asset_class = body.asset_class,
+            name        = body.name,
         )
         return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -142,11 +156,22 @@ def _analyze_and_save(holding: dict, user_id: str) -> dict:
     ticker = holding["ticker"]
     from src.providers import market_data_client
     client = market_data_client()
-    ctx = {"ticker": ticker, "buy_price": holding.get("buy_price"), "quantity": holding.get("quantity")}
+    asset_class = holding.get("asset_class", "EQUITY")
+    ctx = {"ticker": ticker, "asset_class": asset_class,
+           "buy_price": holding.get("buy_price"), "quantity": holding.get("quantity")}
     try:
-        ctx["current_price"] = round(float(client.quote(ticker).data["price"]), 2)
+        ctx["current_price"] = _price_ctx(holding)
     except Exception:
         ctx["current_price"] = None
+    if asset_class != "EQUITY":
+        # Crypto/funds have no P/E or filings: give the model return/risk stats instead.
+        try:
+            from src.assets import service
+            from src.assets.types import parse_symbol
+            ctx["metrics"] = service.metrics(parse_symbol(ticker, asset_class), "1y")
+        except Exception:
+            ctx["metrics"] = None
+        return _finish_analysis(holding, ctx, user_id)
     try:
         info = client.fundamentals(ticker).data or {}
         ctx["pe"]  = info.get("trailingPE")
@@ -164,6 +189,11 @@ def _analyze_and_save(holding: dict, user_id: str) -> dict:
     except Exception:
         ctx["headlines"] = []
 
+    return _finish_analysis(holding, ctx, user_id)
+
+
+def _finish_analysis(holding: dict, ctx: dict, user_id: str) -> dict:
+    ticker = holding["ticker"]
     verdict = _call_llm_verdict(ctx)
     save_holding_analysis(
         holding_id     = holding["id"],
@@ -230,8 +260,9 @@ def analyze_all_holdings(market: str | None = Query(None), user=Depends(get_curr
             )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.warning("Portfolio analyze-all limit check failed for %s, allowing run: %s", user.get("user_id"), e)
+    except Exception:
+        logger.exception("Portfolio analyze-all quota check failed for %s", user.get("user_id"))
+        raise HTTPException(status_code=503, detail="Could not verify your usage quota. Please retry shortly.")
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
@@ -264,7 +295,7 @@ def _call_llm_verdict(ctx: dict) -> dict:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         prompt = (
-            "You are a CFA-certified portfolio strategist. Given the data below for a stock the user "
+            "You are a CFA-certified portfolio strategist. Given the data below for an asset (stock, crypto or fund) the user "
             "already holds, weigh fundamentals, valuation, and news sentiment, then decide an action "
             "and realistic price levels. Respond with ONLY raw JSON, no markdown:\n"
             '{"recommendation": "HOLD|BUY_MORE|SELL", "target_price": number, "stop_loss": number, '
@@ -273,7 +304,7 @@ def _call_llm_verdict(ctx: dict) -> dict:
             '"why_not_buy": ["specific risk", "specific risk"]}\n\n'
             f"Data: {json.dumps(ctx, default=str)}\n"
             f"Current price: {cur}. Target and stop_loss must be absolute prices in the same currency. "
-            "why_buy and why_not_buy must cite the actual figures provided (P/E, ROE, growth, sentiment)."
+            "why_buy and why_not_buy must cite the actual figures provided (P/E, ROE, growth, sentiment, or for crypto/funds the return, volatility and drawdown metrics)."
         )
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",

@@ -42,6 +42,7 @@ A team of 4 AI agents researches, analyses, and scores stocks across Indian and 
 | 🎛 Pick Filtering | Picks on the India/US pages are filtered and sorted by your Analysis settings (confidence level, risk tolerance, sector, sort order) in real time |
 | ⚙️ User Settings | Full settings page — Account (username, notification email), Appearance (dark/light + 4 accent colours), Analysis (risk tolerance + preferred sectors), Display (card layout, sort order), Plan & Usage |
 | 🎓 Onboarding Tutorial | 6-step guided modal shown once per account on first login — persisted in Postgres so it never repeats on a different device |
+| 🪙 Crypto & Funds | Crypto (CoinGecko, Yahoo fallback), Indian mutual funds (AMFI NAV via mfapi.in), US mutual funds/ETFs — search, quotes, history and risk metrics (volatility, drawdown, Sharpe, rolling returns); holdable in the portfolio via canonical symbols (`CRYPTO:bitcoin`, `MF:118989`) |
 | 🌍 Market Scoping | India runs stay on the India page, US on the US page — no cross-leak |
 | 🔐 Auth & Isolation | Supabase JWT login; each user sees only their own picks & portfolio |
 | 🧾 Run Attribution + Dedup | Picks tagged with who ran them; same-combo same-day runs replace rather than duplicate |
@@ -218,12 +219,15 @@ GET  /api/stock/{ticker}/peers                  # sector competitors with live p
 GET  /api/stock/{ticker}/ai
 GET  /api/market/status|indices|movers|news|fx|fii-dii|sector-heatmap|holidays
 GET  /api/universe/search?q=&market=            # stock search autocomplete (IND / US)
+GET  /api/assets/search?q=&asset_class=CRYPTO|FUND&market=   # crypto + Indian/US mutual funds & ETFs
+GET  /api/assets/quote|history|metrics|info?symbol=          # any asset: CRYPTO:bitcoin, MF:118989, AAPL, VTSAX
 GET  /api/picks?market=                         # current user's saved picks
 GET  /api/portfolio?market=                     # holdings w/ live price + P&L
 POST /api/portfolio/{id}/analyze                # quick per-holding verdict
 POST /api/portfolio/analyze-all                 # analyze whole portfolio (1 quota run)
 PATCH /api/auth/profile                         # update username / notification_email / tutorial_seen
-GET  /api/admin/users|usage|runs|logs           # admin only
+GET  /api/admin/users|usage|runs|logs|provider-health   # admin only
+GET  /health  /ready                            # liveness / readiness (+ data-provider status)
 ```
 
 All protected routes require a Supabase `Authorization: Bearer <jwt>` header.
@@ -242,6 +246,7 @@ All protected routes require a Supabase `Authorization: Bearer <jwt>` header.
 | `FINNHUB_API_KEY` | Recommended | US quotes, fundamentals, company news |
 | `TWELVE_DATA_API_KEY` | Optional | Quote/history fallback |
 | `ALPHA_VANTAGE_API_KEY` | Optional | Quote/history fallback |
+| `COINGECKO_API_KEY` | Optional | Free CoinGecko demo key; raises crypto rate limits (public API works without it) |
 | `DATABASE_URL` | Required in production | Postgres URL. **Never commit this.** Omit locally (with `APP_ENV=development`) to use SQLite. Production refuses to start without it. |
 | `JOB_WORKER_MODE` | Optional | `embedded` (default) or `external` (run `python -m src.jobs.worker` separately) |
 | `LOG_FORMAT` / `TRUST_PROXY` / `RATE_LIMIT_ENABLED` | Optional | `json` logs; trust `X-Forwarded-For`; toggle the per-IP rate limiter |
@@ -293,7 +298,8 @@ Deploy the `frontend/` directory with `NEXT_PUBLIC_API_URL=https://your-api-host
 
 ## Known Limitations
 
-- **Upstox token refresh** — the Analytics Token is long-lived but not permanent; rotate it in your host's environment variables when it expires.
+- **Upstox token expiry** — the Analytics Token is a ~1-year JWT, not permanent. `/ready` (field `providers.upstox`) and `GET /api/admin/provider-health` report its status, the app logs a warning 30 days before expiry and an error if it is rejected. Generate a new one on Upstox's developer apps page and update `UPSTOX_ANALYTICS_TOKEN`.
+- **Indian mutual funds** — Upstox's public API has no open-ended mutual-fund data (its instrument master lists none), so fund NAVs come from AMFI via mfapi.in. Indian **ETFs** (NIFTYBEES, GOLDBEES, …) are exchange-traded and work through Upstox like stocks.
 - **yfinance as supplement** — Market Cap and Debt/Equity for Indian stocks come from a cached yfinance call (24h TTL). May show `—` briefly if yfinance rate-limits.
 - **Finnhub free tier** — covers US fully; Indian (NSE) symbols return 403, so India stays on Upstox/yfinance. Finnhub daily candles are paid-tier, so US history uses yfinance.
 - **Paper trading only** — no brokerage integration; prices may be ~15 min delayed.

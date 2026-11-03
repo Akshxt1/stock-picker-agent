@@ -108,10 +108,12 @@ class Portfolio(Base):
     user_id = Column(String, nullable=True)     # Link to user account
     username = Column(String, nullable=True)    # Human readable name
     
-    ticker = Column(String)
-    market = Column(String)
+    ticker = Column(String)          # canonical symbol, e.g. RELIANCE.NS, CRYPTO:bitcoin, MF:118989
+    market = Column(String)          # INDIA | US | CRYPTO
     currency = Column(String)
-    
+    asset_class = Column(String, nullable=False, default="EQUITY", server_default="EQUITY")  # EQUITY | CRYPTO | FUND
+    name = Column(String, nullable=True)   # display name (fund scheme / coin); stocks derive theirs from the ticker
+
     # Entry details
     quantity = Column(Float)
     entry_price = Column(Float)
@@ -236,7 +238,11 @@ class JobEvent(Base):
 # ─── Initialization ───────────────────────────────────────────────────────────
 
 def init_db():
-    """Bring the schema to the latest Alembic revision."""
+    """Bring the schema to the latest Alembic revision (once per process).
+
+    Many callers (e.g. the provider cache) invoke this defensively, so it must
+    be cheap after the first call.
+    """
     from src.database.migrate import upgrade_to_head
     upgrade_to_head()
 
@@ -335,6 +341,8 @@ def get_portfolio(user_id: str, market: str = None) -> list:
             {
                 "id":               r.id,
                 "ticker":           r.ticker,
+                "asset_class":      r.asset_class or "EQUITY",
+                "name":             r.name,
                 "market":           r.market,
                 "currency":         r.currency,
                 "quantity":         r.quantity,
@@ -377,21 +385,22 @@ def save_holding_analysis(holding_id: int, user_id: str, recommendation: str,
         return True
 
 def add_portfolio_position(user_id: str, ticker: str, quantity: float, buy_price: float,
-                           username: str = None):
-    t = ticker.upper()
-    if t.endswith(".NS") or t.endswith(".BO"):
-        market, currency = "INDIA", "INR"
-    else:
-        market, currency = "US", "USD"
+                           username: str = None, asset_class: str = None, name: str = None):
+    """Add a holding. `ticker` is a canonical symbol (see src/assets/types.py);
+    raises ValueError if it cannot be parsed."""
+    from src.assets.types import parse_symbol
+    ref = parse_symbol(ticker, asset_class)
     with Session() as sess:
         pos = Portfolio(
             user_id=user_id,
             username=username,
-            ticker=t,
+            ticker=ref.symbol,
             quantity=quantity,
             entry_price=buy_price,
-            market=market,
-            currency=currency,
+            market=ref.market,
+            currency=ref.currency,
+            asset_class=ref.asset_class.value,
+            name=(name or "").strip()[:120] or None,
         )
         sess.add(pos)
         sess.commit()
@@ -601,20 +610,3 @@ def update_account_type(user_id: str, account_type: str) -> bool:
         profile.account_type = account_type
         sess.commit()
     return True
-
-
-def get_usage_stats(user_id: str = None) -> dict:
-    """Get aggregated usage stats for a user (or global if user_id is None)"""
-    with Session() as sess:
-        query = sess.query(ApiUsage)
-        if user_id:
-            query = query.filter(ApiUsage.user_id == user_id)
-            
-        logs = query.all()
-        
-        return {
-            "total_calls": len(logs),
-            "total_input": sum(log.input_tokens for log in logs),
-            "total_output": sum(log.output_tokens for log in logs),
-            "total_cost": sum(log.estimated_cost for log in logs)
-        }

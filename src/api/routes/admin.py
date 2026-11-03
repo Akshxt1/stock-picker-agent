@@ -7,7 +7,8 @@ GET  /api/admin/users                       — all user profiles
 PATCH /api/admin/users/{user_id}/account-type — update a user's account type
 GET  /api/admin/usage                       — token usage stats
 GET  /api/admin/runs                        — recent crew run log
-GET  /api/admin/logs                        — last N lines from app log file
+GET  /api/admin/logs                        — last N log lines (log file if present, else in-memory buffer)
+GET  /api/admin/provider-health             — data-provider status (Upstox token validity/expiry); ?refresh=true re-probes
 """
 
 import os
@@ -116,45 +117,22 @@ def recent_runs(_user=Depends(require_admin)):
 
 @router.get("/logs")
 def app_logs(lines: int = 100, _user=Depends(require_admin)):
+    lines = max(1, min(lines, 1000))
     try:
-        if not LOG_FILE.exists():
-            return {"lines": [], "path": str(LOG_FILE)}
-        content = LOG_FILE.read_text(encoding="utf-8", errors="replace")
-        all_lines = content.splitlines()
-        return {
-            "lines": all_lines[-lines:],
-            "total": len(all_lines),
-            "path":  str(LOG_FILE),
-        }
+        if LOG_FILE.exists():
+            all_lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+            return {"lines": all_lines[-lines:], "total": len(all_lines), "path": str(LOG_FILE)}
+        from src.api.logging_config import recent_logs
+        buf = recent_logs(lines)
+        return {"lines": buf, "total": len(buf), "path": "in-memory buffer (no log file)"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Scheduler status ──────────────────────────────────────────────────────────
+# ── Provider health ───────────────────────────────────────────────────────────
 
-@router.get("/scheduler")
-def scheduler_status(_user=Depends(require_admin)):
-    try:
-        from src.database.models import Session, SystemSettings
-        with Session() as sess:
-            row = sess.query(SystemSettings).filter(SystemSettings.key == "scheduler").first()
-        return row.value if row else {"enabled": False, "jobs": []}
-    except Exception as e:
-        return {"enabled": False, "jobs": [], "error": str(e)}
-
-
-@router.post("/scheduler")
-def update_scheduler(config: dict, _user=Depends(require_admin)):
-    try:
-        from src.database.models import Session, SystemSettings
-        from datetime import datetime, timezone
-        with Session() as sess:
-            row = sess.query(SystemSettings).filter(SystemSettings.key == "scheduler").first()
-            if row:
-                row.value = config
-            else:
-                sess.add(SystemSettings(key="scheduler", value=config))
-            sess.commit()
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/provider-health")
+def provider_health_status(refresh: bool = False, _user=Depends(require_admin)):
+    from src.providers.health import provider_health, overall
+    results = provider_health(refresh=refresh)
+    return {"status": overall(results), "providers": results}

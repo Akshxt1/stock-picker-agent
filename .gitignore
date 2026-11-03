@@ -26,8 +26,6 @@ fix_portfolio.py
 make_admin.py
 check_portfolio.py
 run_test.py
-check_imports.py
-test_tools.py
 fix_db.py
 
 # Node / Next.js frontend
@@ -35,13 +33,13 @@ node_modules/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/*.tsbuildinfo
 frontend/.env.local
 
 # Logs directory
 logs/
 
 # Provider data caches (regenerated at runtime)
-src/providers/_iifl_scripmaster.csv
 src/providers/_upstox_instruments.json
 
 # Python build artifacts
