@@ -9,6 +9,7 @@ import { ArrowLeft, Loader2, TrendingUp, TrendingDown, Plus, AlertTriangle } fro
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import AddToPortfolio from "@/components/add-to-portfolio"
+import ScenarioOutlook from "@/components/scenario-outlook"
 import { assets, type AssetCandle, type AssetClass, type AssetInfo, type AssetMetrics, type AssetQuote } from "@/lib/api"
 import { formatMoney, formatPct, shortSymbol } from "@/lib/utils"
 
@@ -195,6 +196,8 @@ function AssetDetail() {
           )}
         </CardContent>
       </Card>
+
+      <ScenarioOutlook symbol={symbol} assetClass={aclass} />
 
       {/* Risk & return */}
       <Card className="border-border/60">

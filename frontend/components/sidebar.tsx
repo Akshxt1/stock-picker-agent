@@ -9,7 +9,7 @@ import { useRun }      from "@/lib/run-context"
 import ThemeToggle     from "@/components/ui/theme-toggle"
 import {
   LayoutDashboard, TrendingUp, Globe, Briefcase,
-  BarChart2, Settings, LogOut, Shield, Eye, Loader2, Coins,
+  BarChart2, Settings, LogOut, Shield, Eye, Loader2, Coins, Target,
 } from "lucide-react"
 
 const NAV = [
@@ -18,6 +18,7 @@ const NAV = [
   { href: "/us",        label: "US Market", icon: Globe           },
   { href: "/assets",    label: "Crypto & Funds", icon: Coins     },
   { href: "/portfolio", label: "Portfolio", icon: Briefcase       },
+  { href: "/forecasts", label: "Track Record", icon: Target       },
   { href: "/metrics",   label: "Metrics",   icon: BarChart2       },
   { href: "/settings",  label: "Settings",  icon: Settings        },
 ]

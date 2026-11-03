@@ -17,10 +17,11 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import AddToPortfolio from "@/components/add-to-portfolio"
+import ScenarioOutlook from "@/components/scenario-outlook"
 import {
   ArrowLeft, TrendingUp, TrendingDown, Loader2, ExternalLink,
   Sparkles, BarChart3, Newspaper, CalendarDays, Check, X,
-  PieChart as PieChartIcon, LayoutList, Users,
+  PieChart as PieChartIcon, LayoutList, Users, Target,
 } from "lucide-react"
 import { formatMoney, formatCompact, safeUrl } from "@/lib/utils"
 
@@ -204,6 +205,7 @@ export default function StockDetailPage() {
         <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="ai"><Sparkles className="h-4 w-4" /> AI Analysis</TabsTrigger>
           <TabsTrigger value="tech"><BarChart3 className="h-4 w-4" /> Technicals</TabsTrigger>
+          <TabsTrigger value="scenarios"><Target className="h-4 w-4" /> Scenarios</TabsTrigger>
           <TabsTrigger value="news"><Newspaper className="h-4 w-4" /> News</TabsTrigger>
           <TabsTrigger value="events"><CalendarDays className="h-4 w-4" /> Events</TabsTrigger>
           {isIndia && <TabsTrigger value="shareholding"><PieChartIcon className="h-4 w-4" /> Shareholding</TabsTrigger>}
@@ -212,6 +214,7 @@ export default function StockDetailPage() {
 
         <TabsContent value="ai"><AITab ticker={ticker} currency={cur} /></TabsContent>
         <TabsContent value="tech"><TechTab ticker={ticker} currency={cur} /></TabsContent>
+        <TabsContent value="scenarios"><ScenarioOutlook symbol={ticker} /></TabsContent>
         <TabsContent value="news"><NewsTab ticker={ticker} /></TabsContent>
         <TabsContent value="events"><EventsTab ticker={ticker} currency={cur} /></TabsContent>
         {isIndia && <TabsContent value="shareholding"><ShareholdingTab ticker={ticker} /></TabsContent>}

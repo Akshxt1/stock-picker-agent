@@ -290,6 +290,58 @@ export const assets = {
     request<AssetMetrics>(`/api/assets/metrics?${assetQs(symbol, c, `&period=${period}`)}`),
 }
 
+// ── Scenario forecasts ────────────────────────────────────────────────────────
+
+export type ScenarioKey = "CRASH" | "DECLINE" | "STEADY" | "STRONG_GROWTH" | "MULTIBAGGER"
+export type ForecastHorizon = "3m" | "1y"
+
+export interface ScenarioBucket { scenario: ScenarioKey; label: string; min: number | null; max: number | null }
+
+export interface Forecast {
+  symbol: string; asset_class: AssetClass; horizon: ForecastHorizon; horizon_days: number
+  as_of: string; price: number; currency: string
+  probs: Record<ScenarioKey, number>
+  base_rate: Record<ScenarioKey, number>
+  quantiles: Record<"p5" | "p25" | "p50" | "p75" | "p95", number>
+  expected_return: number; daily_vol: number; n_samples: number; model_version: string
+  low_volatility?: boolean
+  scenarios: ScenarioBucket[]
+}
+
+export interface Reliability { bin: [number, number]; predicted: number; observed: number; count: number }
+
+export interface ForecastScore {
+  n?: number; brier?: number; brier_base_rate?: number; skill?: number | null
+  log_loss?: number; log_loss_base_rate?: number; reliability?: Reliability[]
+}
+
+export interface ForecastBacktest extends ForecastScore {
+  status: "ok" | "insufficient_history"; detail?: string
+  first?: string; last?: string; model_version: string
+}
+
+export interface TrackRecord extends ForecastScore {
+  total: number; resolved: number; pending: number; model_version: string
+  actual_distribution?: Record<ScenarioKey, number>
+  mean_predicted?: Record<ScenarioKey, number>
+}
+
+export interface ForecastExplanation {
+  summary: string; bull_case: string[]; bear_case: string[]; watch: string[]
+  model: string; generated_at: string; headlines_used: number
+}
+
+export const forecast = {
+  get: (symbol: string, horizon: ForecastHorizon = "3m", c?: AssetClass) =>
+    request<Forecast>(`/api/forecast?${assetQs(symbol, c, `&horizon=${horizon}`)}`),
+  backtest: (symbol: string, horizon: ForecastHorizon = "3m", c?: AssetClass) =>
+    request<ForecastBacktest>(`/api/forecast/backtest?${assetQs(symbol, c, `&horizon=${horizon}`)}`),
+  explain: (symbol: string, horizon: ForecastHorizon = "3m", c?: AssetClass) =>
+    request<ForecastExplanation>(`/api/forecast/explain?${assetQs(symbol, c, `&horizon=${horizon}`)}`),
+  trackRecord: (horizon?: ForecastHorizon) =>
+    request<TrackRecord>(`/api/forecast/track-record${horizon ? `?horizon=${horizon}` : ""}`),
+}
+
 // ── FX ────────────────────────────────────────────────────────────────────────
 
 export const fx = {
@@ -528,4 +580,4 @@ export function streamStockAnalysis(
 
 // ── Convenience re-export ─────────────────────────────────────────────────────
 
-export const api = { auth, picks, portfolio, market, universe, stock, fx, assets }
+export const api = { auth, picks, portfolio, market, universe, stock, fx, assets, forecast }
