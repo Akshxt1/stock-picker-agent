@@ -4,12 +4,18 @@ import { useState } from "react"
 import * as Dialog from "@radix-ui/react-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { portfolio } from "@/lib/api"
+import { portfolio, type AssetClass } from "@/lib/api"
 import { Plus, Loader2, Check, X } from "lucide-react"
 import { currencySymbol } from "@/lib/utils"
 
 interface Props {
+  /** Canonical symbol: AAPL, RELIANCE.NS, CRYPTO:bitcoin, MF:118989 */
   ticker: string
+  assetClass?: AssetClass
+  /** Display name stored with the holding (funds / coins). */
+  name?: string
+  /** Heading shown in the dialog instead of the raw symbol. */
+  label?: string
   defaultPrice?: number | null
   currency?: string | null
   /** Render-prop trigger; defaults to a small "Add" button. */
@@ -17,7 +23,7 @@ interface Props {
   onAdded?: () => void
 }
 
-export default function AddToPortfolio({ ticker, defaultPrice, currency, trigger, onAdded }: Props) {
+export default function AddToPortfolio({ ticker, assetClass, name, label, defaultPrice, currency, trigger, onAdded }: Props) {
   const [open,  setOpen]  = useState(false)
   const [qty,   setQty]   = useState("")
   const [price, setPrice] = useState(defaultPrice ? String(defaultPrice) : "")
@@ -33,7 +39,8 @@ export default function AddToPortfolio({ ticker, defaultPrice, currency, trigger
     if (!qty || !price) return
     setBusy(true); setErr(null)
     try {
-      await portfolio.add(ticker.toUpperCase(), parseFloat(qty), parseFloat(price))
+      const symbol = ticker.includes(":") ? ticker : ticker.toUpperCase()
+      await portfolio.add(symbol, parseFloat(qty), parseFloat(price), { assetClass, name })
       setDone(true)
       onAdded?.()
       setTimeout(() => { setOpen(false); setDone(false); setQty("") }, 900)
@@ -66,7 +73,7 @@ export default function AddToPortfolio({ ticker, defaultPrice, currency, trigger
             <Dialog.Title className="text-base font-bold">Add to Portfolio</Dialog.Title>
             <Dialog.Close className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></Dialog.Close>
           </div>
-          <p className="text-xs text-muted-foreground mb-4 font-mono">{ticker}</p>
+          <p className="text-xs text-muted-foreground mb-4 font-mono">{label ?? ticker}</p>
 
           <form onSubmit={submit} className="space-y-3">
             <div>

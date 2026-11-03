@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { portfolio, fx, type Holding } from "@/lib/api"
+import { portfolio, fx, assets, type Holding, type AssetSearchResult, type AssetClass } from "@/lib/api"
+import AssetSearch from "@/components/asset-search"
 import { Button } from "@/components/ui/button"
 import { Input }  from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -10,14 +11,26 @@ import HoldingRow from "@/components/holding-row"
 import {
   Plus, Loader2, ArrowLeftRight, TrendingUp, TrendingDown, Sparkles, Wallet,
 } from "lucide-react"
-import { isIndianTicker, formatMoney } from "@/lib/utils"
+import { isIndianTicker, formatMoney, currencySymbol } from "@/lib/utils"
 
 type DisplayCcy = "INR" | "USD"
+type AddKind = "IN_STOCK" | "US_STOCK" | "CRYPTO" | "IN_FUND" | "US_FUND"
+
+const ADD_KINDS: { value: AddKind; label: string }[] = [
+  { value: "IN_STOCK", label: "🇮🇳 India stock" },
+  { value: "US_STOCK", label: "🇺🇸 US stock" },
+  { value: "CRYPTO",   label: "🪙 Crypto" },
+  { value: "IN_FUND",  label: "🇮🇳 India fund" },
+  { value: "US_FUND",  label: "🇺🇸 US fund / ETF" },
+]
+const KIND_CCY: Record<AddKind, string> = { IN_STOCK: "INR", US_STOCK: "USD", CRYPTO: "USD", IN_FUND: "INR", US_FUND: "USD" }
 
 export default function PortfolioPage() {
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [loading,  setLoading]  = useState(true)
-  const [market,   setMarket]   = useState<"INDIA" | "US">("INDIA")
+  const [kind,     setKind]     = useState<AddKind>("IN_STOCK")
+  const [picked,   setPicked]   = useState<AssetSearchResult | null>(null)
+  const [addErr,   setAddErr]   = useState<string | null>(null)
   const [ticker,   setTicker]   = useState("")
   const [qty,      setQty]      = useState("")
   const [price,    setPrice]    = useState("")
@@ -26,7 +39,7 @@ export default function PortfolioPage() {
   const [usdInr,   setUsdInr]   = useState<number | null>(null)
   const [allCcy,   setAllCcy]   = useState<DisplayCcy>("INR")
   const [analyzing, setAnalyzing] = useState(false)
-  const [tab,      setTab]      = useState<"ind" | "us" | "all">("all")
+  const [tab,      setTab]      = useState<"ind" | "us" | "crypto" | "funds" | "all">("all")
 
   async function load() {
     try { setHoldings(await portfolio.list()) }
@@ -37,30 +50,49 @@ export default function PortfolioPage() {
   useEffect(() => { load() }, [])
   useEffect(() => { fx.rate("USDINR").then(r => setUsdInr(r.rate)).catch(() => {}) }, [])
 
-  function normalizeTicker(raw: string, mkt: "INDIA" | "US"): string {
-    const t = raw.trim().toUpperCase()
-    if (mkt === "INDIA" && !t.endsWith(".NS") && !t.endsWith(".BO")) return `${t}.NS`
-    if (mkt === "US") return t.replace(/\.(NS|BO)$/i, "")
-    return t
+  const isAssetKind = kind === "CRYPTO" || kind === "IN_FUND" || kind === "US_FUND"
+  const addCcy = KIND_CCY[kind]
+
+  function changeKind(k: AddKind) {
+    setKind(k); setPicked(null); setTicker(""); setPrice(""); setAddErr(null)
+  }
+
+  async function pickAsset(a: AssetSearchResult) {
+    setPicked(a); setAddErr(null)
+    try { setPrice(String((await assets.quote(a.symbol, a.asset_class)).price)) }
+    catch { /* user can type the price */ }
+  }
+
+  function resolveSymbol(): { symbol: string; assetClass?: AssetClass; name?: string } | null {
+    if (isAssetKind) {
+      return picked ? { symbol: picked.symbol, assetClass: picked.asset_class, name: picked.name ?? undefined } : null
+    }
+    const t = ticker.trim().toUpperCase()
+    if (!t) return null
+    if (kind === "IN_STOCK") return { symbol: /\.(NS|BO)$/.test(t) ? t : `${t}.NS` }
+    return { symbol: t.replace(/\.(NS|BO)$/, "") }
   }
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault()
     const parsedQty = parseFloat(qty)
     const parsedPrice = parseFloat(price)
-    if (!ticker || !qty || !price || parsedQty <= 0 || parsedPrice <= 0 || isNaN(parsedQty) || isNaN(parsedPrice)) return
-    setAdding(true)
+    const target = resolveSymbol()
+    if (!target || !(parsedQty > 0) || !(parsedPrice > 0)) return
+    setAdding(true); setAddErr(null)
     try {
-      await portfolio.add(normalizeTicker(ticker, market), parsedQty, parsedPrice)
-      setTicker(""); setQty(""); setPrice(""); setShowAdd(false)
+      await portfolio.add(target.symbol, parsedQty, parsedPrice, { assetClass: target.assetClass, name: target.name })
+      setTicker(""); setQty(""); setPrice(""); setPicked(null); setShowAdd(false)
       await load()
+    } catch (err: any) {
+      setAddErr(err?.message || "Could not add this position")
     } finally { setAdding(false) }
   }
 
   async function analyzePortfolio() {
     setAnalyzing(true)
     try {
-      const mkt = tab === "ind" ? "INDIA" : tab === "us" ? "US" : undefined
+      const mkt = tab === "ind" ? "INDIA" : tab === "us" ? "US" : tab === "crypto" ? "CRYPTO" : undefined
       await portfolio.analyzeAll(mkt)
       await load()
     } catch (e: any) {
@@ -68,8 +100,11 @@ export default function PortfolioPage() {
     } finally { setAnalyzing(false) }
   }
 
-  const ind = useMemo(() => holdings.filter(h => h.market === "INDIA"), [holdings])
-  const us  = useMemo(() => holdings.filter(h => h.market === "US"),    [holdings])
+  const isFund = (h: Holding) => h.asset_class === "FUND"
+  const ind    = useMemo(() => holdings.filter(h => h.market === "INDIA" && !isFund(h)), [holdings])
+  const us     = useMemo(() => holdings.filter(h => h.market === "US" && !isFund(h)),    [holdings])
+  const crypto = useMemo(() => holdings.filter(h => h.asset_class === "CRYPTO"),         [holdings])
+  const funds  = useMemo(() => holdings.filter(isFund),                                  [holdings])
 
   const noConvert = (v: number | null | undefined) => (v == null ? null : v)
   function convertTo(target: DisplayCcy) {
@@ -104,55 +139,72 @@ export default function PortfolioPage() {
         <div className="rounded-xl border border-border/60 bg-card p-4">
           <form onSubmit={handleAdd} className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-muted-foreground uppercase tracking-wide">Market</label>
-              <Select value={market} onValueChange={v => setMarket(v as "INDIA" | "US")}>
-                <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+              <label className="text-[11px] text-muted-foreground uppercase tracking-wide">Type</label>
+              <Select value={kind} onValueChange={v => changeKind(v as AddKind)}>
+                <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="INDIA">🇮🇳 India</SelectItem>
-                  <SelectItem value="US">🇺🇸 US</SelectItem>
+                  {ADD_KINDS.map(k => <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-muted-foreground uppercase tracking-wide">Ticker</label>
-              <Input placeholder={market === "INDIA" ? "e.g. TATATECH" : "e.g. AAPL"} value={ticker}
-                     onChange={e => setTicker(e.target.value)} className="w-44" />
+              <label className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                {isAssetKind ? (kind === "CRYPTO" ? "Coin" : "Fund") : "Ticker"}
+              </label>
+              {isAssetKind ? (
+                picked ? (
+                  <div className="flex h-9 w-72 items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 text-sm">
+                    <span className="truncate">{picked.name ?? picked.ticker}</span>
+                    <button type="button" onClick={() => { setPicked(null); setPrice("") }}
+                      className="shrink-0 text-xs text-muted-foreground hover:text-foreground">change</button>
+                  </div>
+                ) : (
+                  <AssetSearch className="w-72"
+                    assetClass={kind === "CRYPTO" ? "CRYPTO" : "FUND"}
+                    market={kind === "CRYPTO" ? "CRYPTO" : kind === "IN_FUND" ? "INDIA" : "US"}
+                    placeholder={kind === "CRYPTO" ? "Search coins…" : "Search funds…"}
+                    onSelect={pickAsset} />
+                )
+              ) : (
+                <Input placeholder={kind === "IN_STOCK" ? "e.g. TATATECH" : "e.g. AAPL"} value={ticker}
+                       onChange={e => setTicker(e.target.value)} className="w-44" />
+              )}
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-muted-foreground uppercase tracking-wide">Quantity</label>
+              <label className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                {isAssetKind ? "Units" : "Quantity"}
+              </label>
               <Input placeholder="10" type="number" step="any" value={qty}
                      onChange={e => setQty(e.target.value)} className="w-28" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[11px] text-muted-foreground uppercase tracking-wide">
-                Buy Price {market === "INDIA" ? "(₹)" : "($)"}
+                {kind === "IN_FUND" ? "Avg NAV" : "Buy Price"} ({currencySymbol(addCcy)})
               </label>
               <Input placeholder="0.00" type="number" step="any" value={price}
                      onChange={e => setPrice(e.target.value)} className="w-32" />
             </div>
-            <Button type="submit" disabled={adding} className="gap-2">
+            <Button type="submit" disabled={adding || (isAssetKind ? !picked : !ticker.trim())} className="gap-2">
               {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Add
             </Button>
           </form>
+          {addErr && <p className="mt-2 text-xs text-destructive">{addErr}</p>}
           {(() => {
             const parsedQty = parseFloat(qty)
             const parsedPrice = parseFloat(price)
-            const totalCost = !isNaN(parsedQty) && !isNaN(parsedPrice) && parsedQty > 0 && parsedPrice > 0
-              ? parsedQty * parsedPrice : null
-            return totalCost != null ? (
+            const totalCost = parsedQty > 0 && parsedPrice > 0 ? parsedQty * parsedPrice : null
+            return (
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Total cost: <span className="font-semibold text-foreground">
-                  {market === "INDIA" ? "₹" : "$"}{totalCost.toLocaleString(market === "INDIA" ? "en-IN" : "en-US", { maximumFractionDigits: 2 })}
-                </span>
-                {market === "INDIA" && ticker && !isIndianTicker(ticker) && (
-                  <> · will be saved as <span className="font-mono text-foreground">{ticker.toUpperCase()}.NS</span> (NSE)</>
+                {totalCost != null && (
+                  <>Total cost: <span className="font-semibold text-foreground">
+                    {currencySymbol(addCcy)}{totalCost.toLocaleString(addCcy === "INR" ? "en-IN" : "en-US", { maximumFractionDigits: 2 })}
+                  </span></>
+                )}
+                {kind === "IN_STOCK" && ticker && !isIndianTicker(ticker) && (
+                  <>{totalCost != null && " · "}will be saved as <span className="font-mono text-foreground">{ticker.toUpperCase()}.NS</span> (NSE)</>
                 )}
               </p>
-            ) : market === "INDIA" && ticker && !isIndianTicker(ticker) ? (
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                Will be saved as <span className="font-mono text-foreground">{ticker.toUpperCase()}.NS</span> (NSE)
-              </p>
-            ) : null
+            )
           })()}
         </div>
       )}
@@ -162,6 +214,8 @@ export default function PortfolioPage() {
           <TabsTrigger value="all">All ({holdings.length})</TabsTrigger>
           <TabsTrigger value="ind">🇮🇳 IND ({ind.length})</TabsTrigger>
           <TabsTrigger value="us">🇺🇸 US ({us.length})</TabsTrigger>
+          <TabsTrigger value="crypto">🪙 Crypto ({crypto.length})</TabsTrigger>
+          <TabsTrigger value="funds">Funds ({funds.length})</TabsTrigger>
         </TabsList>
 
         {loading ? (
@@ -188,6 +242,21 @@ export default function PortfolioPage() {
             <TabsContent value="us">
               <HoldingSection items={us} displayCurrency="USD" convert={(v) => noConvert(v)} onChanged={load}
                 empty="No US holdings yet." />
+            </TabsContent>
+            <TabsContent value="crypto">
+              <HoldingSection items={crypto} displayCurrency="USD" convert={(v) => noConvert(v)} onChanged={load}
+                empty="No crypto holdings yet. Find a coin under Crypto & Funds." />
+            </TabsContent>
+            <TabsContent value="funds">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">India funds are in ₹, US funds in $ — shown in one currency.</p>
+                <Button variant="outline" size="sm" onClick={() => setAllCcy(c => c === "INR" ? "USD" : "INR")}
+                  disabled={!usdInr} className="gap-2 text-xs">
+                  <ArrowLeftRight className="h-3.5 w-3.5" /> Show in {allCcy === "INR" ? "USD ($)" : "INR (₹)"}
+                </Button>
+              </div>
+              <HoldingSection items={funds} displayCurrency={allCcy} convert={convertTo(allCcy)} onChanged={load}
+                empty="No fund holdings yet. Find a fund under Crypto & Funds." />
             </TabsContent>
           </>
         )}

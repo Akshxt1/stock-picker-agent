@@ -8,7 +8,7 @@ import {
   Trash2, ChevronRight, ChevronDown, Sparkles, Loader2,
   Target, ShieldAlert, TrendingUp, TrendingDown,
 } from "lucide-react"
-import { formatMoney } from "@/lib/utils"
+import { formatMoney, assetHref, shortSymbol } from "@/lib/utils"
 
 interface Props {
   holding: Holding
@@ -28,6 +28,9 @@ export default function HoldingRow({ holding: h, displayCurrency, convert, onCha
   const [analyzing, setAnalyzing] = useState(false)
   const [verdict, setVerdict] = useState<HoldingVerdict | null>(null)
 
+  const isAsset = (h.asset_class ?? "EQUITY") !== "EQUITY"
+  const title   = isAsset ? (h.name || shortSymbol(h.ticker)) : shortSymbol(h.ticker)
+  const href    = isAsset ? assetHref(h.ticker, h.asset_class) : `/stock/${encodeURIComponent(h.ticker)}`
   const native  = h.currency || "INR"
   const buy     = convert(h.buy_price, native)
   const current = convert(h.current_price ?? h.buy_price, native)
@@ -66,15 +69,16 @@ export default function HoldingRow({ holding: h, displayCurrency, convert, onCha
       {/* Main row */}
       <div className="flex items-center gap-3 px-4 py-3">
         {/* Left: identity */}
-        <button onClick={() => router.push(`/stock/${encodeURIComponent(h.ticker)}`)}
+        <button onClick={() => router.push(href)}
           className="flex min-w-0 flex-1 items-center gap-2 text-left group">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="font-mono text-sm font-bold">{h.ticker.replace(/\.(NS|BO)$/, "")}</span>
+              <span className={`truncate text-sm font-bold ${isAsset ? "" : "font-mono"}`}>{title}</span>
+              {isAsset && <Badge variant="outline" className="text-[9px]">{h.asset_class === "CRYPTO" ? "Crypto" : "Fund"}</Badge>}
               {reco && <Badge variant={RECO_VARIANT[reco] ?? "outline"} className="text-[9px]">{reco.replace("_", " ")}</Badge>}
             </div>
             <p className="truncate text-[11px] text-muted-foreground">
-              {+h.quantity.toPrecision(8)} qty · avg {formatMoney(buy, displayCurrency)}
+              {+h.quantity.toPrecision(8)} {isAsset ? "units" : "qty"} · avg {formatMoney(buy, displayCurrency)}
             </p>
           </div>
           <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -105,7 +109,9 @@ export default function HoldingRow({ holding: h, displayCurrency, convert, onCha
             <Stat label="Avg Cost" value={formatMoney(buy, displayCurrency)} />
             <Stat label="LTP" value={formatMoney(current, displayCurrency)} />
             <Stat label="Invested" value={formatMoney(invested, displayCurrency)} />
-            <Stat label="P/E" value={h.pe_ratio != null ? String(h.pe_ratio) : "—"} />
+            {isAsset
+              ? <Stat label="Type" value={h.asset_class === "CRYPTO" ? "Crypto" : "Fund"} />
+              : <Stat label="P/E" value={h.pe_ratio != null ? String(h.pe_ratio) : "—"} />}
           </div>
 
           {reco && (

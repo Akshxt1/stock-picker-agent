@@ -27,7 +27,12 @@ async function request<T>(
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error((body as any).detail ?? `HTTP ${res.status}`)
+    const detail = (body as any).detail
+    // FastAPI validation errors (422) arrive as a list of {msg, loc}.
+    const message = Array.isArray(detail)
+      ? detail.map((d: any) => d?.msg).filter(Boolean).join("; ")
+      : detail
+    throw new Error(message || `HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
 }
@@ -115,6 +120,8 @@ export const picks = {
 export interface Holding {
   id: number
   ticker: string
+  asset_class?: AssetClass
+  name?: string | null
   market: string | null
   currency: string | null
   quantity: number
@@ -144,10 +151,14 @@ export interface HoldingVerdict {
 export const portfolio = {
   list: (market?: string) =>
     request<Holding[]>(`/api/portfolio${market ? `?market=${market}` : ""}`),
-  add:  (ticker: string, quantity: number, buy_price: number) =>
+  add:  (ticker: string, quantity: number, buy_price: number,
+          opts: { assetClass?: AssetClass; name?: string } = {}) =>
     request<{ ok: boolean }>("/api/portfolio", {
       method: "POST",
-      body: JSON.stringify({ ticker, quantity, buy_price }),
+      body: JSON.stringify({
+        ticker, quantity, buy_price,
+        asset_class: opts.assetClass, name: opts.name,
+      }),
     }),
   del:  (id: number) => request<{ ok: boolean }>(`/api/portfolio/${id}`, { method: "DELETE" }),
   analyze: (id: number) =>
@@ -217,6 +228,66 @@ export const universe = {
     request<StockSearchResult[]>(
       `/api/universe/search?q=${encodeURIComponent(q)}&market=${market}`
     ),
+}
+
+// ── Crypto & funds ────────────────────────────────────────────────────────────
+
+export type AssetClass = "EQUITY" | "CRYPTO" | "FUND"
+
+export interface AssetSearchResult {
+  symbol:      string          // canonical: CRYPTO:bitcoin, MF:118989, VTSAX
+  ticker:      string
+  name:        string | null
+  asset_class: AssetClass
+  market:      "INDIA" | "US" | "CRYPTO"
+  rank?:       number | null
+  fund_type?:  string
+}
+
+export interface AssetQuote {
+  symbol:          string
+  price:           number
+  day_change_pct?: number | null
+  market_cap?:     number | null
+  volume_24h?:     number | null
+  as_of?:          string
+  currency:        string
+  source?:         string
+}
+
+export interface AssetInfo {
+  symbol: string; asset_class: AssetClass; market: string; currency: string
+  name?: string | null; fund_house?: string | null; category?: string | null
+  type?: string | null; isin?: string | null
+}
+
+export interface AssetCandle { date: string; close: number }
+
+export interface AssetMetrics {
+  observations: number
+  start?: string; end?: string
+  total_return?: number | null; cagr?: number | null
+  annual_volatility?: number | null; sharpe?: number | null
+  max_drawdown?: number | null; current_drawdown?: number | null
+  best_day?: number | null; worst_day?: number | null
+  rolling_returns?: Record<"1m" | "3m" | "6m" | "1y", number | null>
+}
+
+const assetQs = (symbol: string, assetClass?: AssetClass, extra = "") =>
+  `symbol=${encodeURIComponent(symbol)}${assetClass ? `&asset_class=${assetClass}` : ""}${extra}`
+
+export const assets = {
+  search: (q: string, assetClass?: "CRYPTO" | "FUND", market?: "INDIA" | "US" | "CRYPTO", limit = 12) =>
+    request<AssetSearchResult[]>(
+      `/api/assets/search?q=${encodeURIComponent(q)}&limit=${limit}` +
+      `${assetClass ? `&asset_class=${assetClass}` : ""}${market ? `&market=${market}` : ""}`),
+  info:    (symbol: string, c?: AssetClass) => request<AssetInfo>(`/api/assets/info?${assetQs(symbol, c)}`),
+  quote:   (symbol: string, c?: AssetClass) => request<AssetQuote>(`/api/assets/quote?${assetQs(symbol, c)}`),
+  history: (symbol: string, period = "1y", c?: AssetClass) =>
+    request<{ candles: AssetCandle[]; currency: string }>(
+      `/api/assets/history?${assetQs(symbol, c, `&period=${period}`)}`),
+  metrics: (symbol: string, period = "1y", c?: AssetClass) =>
+    request<AssetMetrics>(`/api/assets/metrics?${assetQs(symbol, c, `&period=${period}`)}`),
 }
 
 // ── FX ────────────────────────────────────────────────────────────────────────
@@ -457,4 +528,4 @@ export function streamStockAnalysis(
 
 // ── Convenience re-export ─────────────────────────────────────────────────────
 
-export const api = { auth, picks, portfolio, market, universe, stock, fx }
+export const api = { auth, picks, portfolio, market, universe, stock, fx, assets }

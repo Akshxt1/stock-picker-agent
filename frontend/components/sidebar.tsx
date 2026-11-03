@@ -9,13 +9,14 @@ import { useRun }      from "@/lib/run-context"
 import ThemeToggle     from "@/components/ui/theme-toggle"
 import {
   LayoutDashboard, TrendingUp, Globe, Briefcase,
-  BarChart2, Settings, LogOut, Shield, Eye, Loader2,
+  BarChart2, Settings, LogOut, Shield, Eye, Loader2, Coins,
 } from "lucide-react"
 
 const NAV = [
   { href: "/",          label: "Dashboard", icon: LayoutDashboard },
   { href: "/india",     label: "IND Market", icon: TrendingUp      },
   { href: "/us",        label: "US Market", icon: Globe           },
+  { href: "/assets",    label: "Crypto & Funds", icon: Coins     },
   { href: "/portfolio", label: "Portfolio", icon: Briefcase       },
   { href: "/metrics",   label: "Metrics",   icon: BarChart2       },
   { href: "/settings",  label: "Settings",  icon: Settings        },
@@ -75,7 +76,7 @@ export default function Sidebar() {
       {/* ── Nav ── */}
       <nav className="flex-1 space-y-0.5">
         {NAV.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href
+          const active = pathname === href || (href !== "/" && pathname.startsWith(href + "/"))
           return (
             <Link
               key={href}

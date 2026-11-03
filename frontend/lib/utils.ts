@@ -38,7 +38,28 @@ export function formatMoney(value?: number | null, currency: string = "INR"): st
   if (value == null || Number.isNaN(value)) return "—"
   const sym = currencySymbol(currency)
   const locale = currency === "INR" ? "en-IN" : "en-US"
-  return `${sym}${value.toLocaleString(locale, { maximumFractionDigits: 2 })}`
+  // Sub-unit prices (small-cap crypto) need more digits than 2 to be meaningful.
+  const digits = value !== 0 && Math.abs(value) < 1 ? 6 : 2
+  return `${sym}${value.toLocaleString(locale, { maximumFractionDigits: digits })}`
+}
+
+/** Route for an asset's detail page. Plain tickers that are funds need ?class=FUND. */
+export function assetHref(symbol: string, assetClass?: string | null): string {
+  const q = assetClass === "FUND" && !symbol.includes(":") ? "?class=FUND" : ""
+  return `/assets/${encodeURIComponent(symbol)}${q}`
+}
+
+/** Short label for a symbol: RELIANCE.NS → RELIANCE, CRYPTO:bitcoin → BITCOIN. */
+export function shortSymbol(symbol: string): string {
+  if (symbol.startsWith("CRYPTO:")) return symbol.slice(7).toUpperCase()
+  if (symbol.startsWith("MF:")) return `MF ${symbol.slice(3)}`
+  return symbol.replace(/\.(NS|BO)$/, "")
+}
+
+/** Signed percentage from a fraction (0.123 → "+12.30%"). */
+export function formatPct(fraction?: number | null, digits = 2): string {
+  if (fraction == null || Number.isNaN(fraction)) return "—"
+  return `${fraction > 0 ? "+" : ""}${(fraction * 100).toFixed(digits)}%`
 }
 
 /** Parse a confidence string like "85%", "85", or 85 into a number 0–100. */
