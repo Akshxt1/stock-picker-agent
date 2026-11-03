@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { portfolio, fx, assets, type Holding, type AssetSearchResult, type AssetClass } from "@/lib/api"
 import AssetSearch from "@/components/asset-search"
 import { Button } from "@/components/ui/button"
@@ -9,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import HoldingRow from "@/components/holding-row"
 import {
-  Plus, Loader2, ArrowLeftRight, TrendingUp, TrendingDown, Sparkles, Wallet,
+  Plus, Loader2, ArrowLeftRight, TrendingUp, TrendingDown, Sparkles, Wallet, UploadCloud,
 } from "lucide-react"
 import { isIndianTicker, formatMoney, currencySymbol } from "@/lib/utils"
 
@@ -123,7 +124,10 @@ export default function PortfolioPage() {
         <h2 className="text-2xl font-bold flex items-center gap-2">
           <Wallet className="h-6 w-6" /> Portfolio
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button asChild variant="outline" size="sm" className="gap-2">
+            <Link href="/portfolio/strategy"><UploadCloud className="h-4 w-4" /> Upload &amp; get a strategy</Link>
+          </Button>
           <Button variant="outline" size="sm" onClick={analyzePortfolio} disabled={analyzing || holdings.length === 0} className="gap-2">
             {analyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             Analyze Portfolio

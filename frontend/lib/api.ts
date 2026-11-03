@@ -23,6 +23,7 @@ async function request<T>(
     ...(options.headers as Record<string, string>),
   }
   if (token) headers["Authorization"] = `Bearer ${token}`
+  if (typeof FormData !== "undefined" && options.body instanceof FormData) delete headers["Content-Type"]
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
   if (!res.ok) {
@@ -342,6 +343,80 @@ export const forecast = {
     request<TrackRecord>(`/api/forecast/track-record${horizon ? `?horizon=${horizon}` : ""}`),
 }
 
+// ── Portfolio agent (upload -> review -> analysis -> strategy) ───────────────────
+
+export type AgentClassHint = "stock" | "crypto" | "mutual_fund" | "etf" | "other"
+
+export interface AgentCandidate { symbol: string; name: string; asset_class: AssetClass; market: string; score: number }
+
+export interface AgentRow {
+  name: string | null; symbol: string | null; asset_class: AgentClassHint; exchange: string | null
+  quantity: number | null; avg_price: number | null; last_price: number | null
+  current_value: number | null; invested: number | null; pnl_pct: number | null
+  candidates: AgentCandidate[]; match: string | null; status: "matched" | "review" | "unmatched"
+}
+
+export interface AgentParse { source: string; portfolio_currency: string | null; notes: string | null; rows: AgentRow[] }
+
+export interface AgentHoldingIn {
+  symbol: string; quantity: number; avg_price?: number | null; asset_class?: AssetClass | null; name?: string | null
+}
+
+export interface AgentHolding {
+  symbol: string; name?: string | null; display: string; asset_class: AssetClass; market: string; currency: string
+  price: number; quantity: number; avg_price?: number | null; value: number; weight: number
+  pnl_pct?: number | null; risk_share?: number | null
+  metrics?: { annual_volatility?: number | null; max_drawdown?: number | null }
+  outlook_3m?: { downside: number; upside: number; p5: number; p50: number; p95: number } | null
+}
+
+export interface AgentSimHorizon {
+  days: number; paths: number
+  quantiles: Record<"p5" | "p25" | "p50" | "p75" | "p95", number>
+  prob_at_least: Record<string, number>; prob_loss: number
+}
+
+export interface AgentAnalysis {
+  base_currency: string; fx_usd_inr: number | null
+  portfolio: {
+    value: number; cost_known: number | null; pnl_pct: number | null; pnl_amount: number | null
+    cost_coverage: number; breakeven_return: number | null; n_holdings: number; top3_weight: number
+    effective_n: number; annual_volatility?: number; diversification_ratio?: number | null
+    avg_correlation?: number; most_correlated?: { a: string; b: string; corr: number }[]
+    by_asset_class: Record<string, number>; by_market: Record<string, number>
+  }
+  holdings: AgentHolding[]
+  simulation: { horizons: Record<string, AgentSimHorizon>; breakeven_return: number | null; common_days: number } | null
+  failed: string[]; notes: string[]
+}
+
+export interface AgentStep { action: string; symbol: string | null; what: string; why: string | null }
+
+export interface AgentStrategy {
+  headline: string; goal_feasibility: string | null; diagnosis: string[]; plan: AgentStep[]
+  if_markets: { rise: string | null; flat: string | null; fall: string | null }
+  risks: string[]; next_steps: string[]; goal: string; risk: string
+}
+
+export interface AgentJob {
+  status: "queued" | "running" | "done" | "error"; progress: string | null
+  result: { analysis: AgentAnalysis; strategy: AgentStrategy } | null; error: string | null
+}
+
+export const portfolioAgent = {
+  parse: (file: File) => {
+    const fd = new FormData()
+    fd.append("file", file)
+    return request<AgentParse>("/api/portfolio-agent/parse", { method: "POST", body: fd })
+  },
+  analyze: (holdings: AgentHoldingIn[]) =>
+    request<AgentAnalysis>("/api/portfolio-agent/analyze", { method: "POST", body: JSON.stringify({ holdings }) }),
+  startStrategy: (holdings: AgentHoldingIn[], goal: string, risk: string) =>
+    request<{ job_id: string }>("/api/portfolio-agent/strategy", {
+      method: "POST", body: JSON.stringify({ holdings, goal, risk }) }),
+  job: (id: string) => request<AgentJob>(`/api/portfolio-agent/jobs/${id}`),
+}
+
 // ── FX ────────────────────────────────────────────────────────────────────────
 
 export const fx = {
@@ -580,4 +655,4 @@ export function streamStockAnalysis(
 
 // ── Convenience re-export ─────────────────────────────────────────────────────
 
-export const api = { auth, picks, portfolio, market, universe, stock, fx, assets, forecast }
+export const api = { auth, picks, portfolio, market, universe, stock, fx, assets, forecast, portfolioAgent }
