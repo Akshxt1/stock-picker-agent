@@ -158,6 +158,9 @@ def login(body: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
 
+_FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")
+
+
 @router.post("/signup")
 def signup(body: SignupRequest):
     if not supabase:
@@ -165,10 +168,14 @@ def signup(body: SignupRequest):
             return {"message": "Dev mode — signup skipped"}
         _require_supabase()
     try:
+        redirect_to = f"{_FRONTEND_URL}/login" if _FRONTEND_URL else None
+        signup_opts: dict = {"data": {"username": body.username}}
+        if redirect_to:
+            signup_opts["email_redirect_to"] = redirect_to
         resp = supabase.auth.sign_up({
             "email":    body.email,
             "password": body.password,
-            "options":  {"data": {"username": body.username}},
+            "options":  signup_opts,
         })
         return {
             "message": "Check your email to confirm your account.",
