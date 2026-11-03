@@ -24,6 +24,6 @@ def _schema():
 def _clean_tables():
     yield
     with models.Session() as s:
-        for table in (models.JobEvent, models.Job, models.UserProfile):
+        for table in (models.JobEvent, models.Job, models.UserProfile, models.Prediction):
             s.query(table).delete()
         s.commit()

@@ -55,6 +55,8 @@ def _period_to_outputsize(period: str) -> int:
         "3mo": 90,
         "6mo": 180,
         "1y": 365,
+        "2y": 730,
+        "5y": 1825,
     }.get(period, 180)
 
 
@@ -72,7 +74,9 @@ def _df_to_payload(df: pd.DataFrame, source: str) -> dict:
 def _payload_to_df(payload: dict) -> pd.DataFrame:
     return pd.DataFrame(
         payload.get("data", []),
-        index=pd.to_datetime(payload.get("index", [])),
+        # Keep wall-clock dates only: cached strings may carry mixed UTC offsets (DST),
+        # which pandas refuses to parse as one index.
+        index=pd.to_datetime([str(i)[:19] for i in payload.get("index", [])]),
         columns=payload.get("columns", []),
     )
 
@@ -106,6 +110,8 @@ class YFinanceProvider(BaseProvider):
         hist = yf.Ticker(ticker).history(period=period, auto_adjust=False)
         if hist.empty:
             raise ProviderError(f"No yfinance history for {ticker}")
+        if getattr(hist.index, "tz", None) is not None:
+            hist.index = hist.index.tz_localize(None)
         return hist
 
     def quote(self, ticker: str) -> dict:
@@ -561,7 +567,7 @@ class UpstoxProvider(BaseProvider):
         key = self._key(ticker)
         days = {
             "1d": 1, "5d": 7, "1mo": 32, "3mo": 92,
-            "6mo": 185, "1y": 366, "2y": 730,
+            "6mo": 185, "1y": 366, "2y": 730, "5y": 1830, "max": 3650,
         }.get(period, 185)
         end_dt   = datetime.date.today()
         start_dt = end_dt - datetime.timedelta(days=days)

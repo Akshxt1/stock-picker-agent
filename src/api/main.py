@@ -24,6 +24,7 @@ from src.api.routes.universe  import router as universe_router
 from src.api.routes.admin     import router as admin_router
 from src.api.routes.stock     import router as stock_router
 from src.api.routes.assets    import router as assets_router
+from src.api.routes.forecast  import router as forecast_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -44,15 +45,18 @@ async def lifespan(app: FastAPI):
     if os.getenv("JOB_WORKER_MODE", "embedded").lower() == "embedded":
         from src.jobs.worker import start_embedded_workers
         stop_workers = start_embedded_workers()
-    stop_monitor = None
+    stop_monitor = stop_resolver = None
     if os.getenv("PROVIDER_MONITOR", "true").lower() not in ("0", "false", "no"):
         from src.providers.health import start_monitor
         stop_monitor = start_monitor()
+        from src.forecast.service import start_resolver
+        stop_resolver = start_resolver()
     yield
     if stop_workers:
         stop_workers.set()
     if stop_monitor:
         stop_monitor.set()
+        stop_resolver.set()
 
 app = FastAPI(title="StockPicker API", version="2.1.0", lifespan=lifespan)
 
@@ -89,6 +93,7 @@ app.include_router(universe_router,  prefix="/api/universe")
 app.include_router(admin_router,     prefix="/api/admin")
 app.include_router(stock_router,     prefix="/api/stock")
 app.include_router(assets_router,    prefix="/api/assets")
+app.include_router(forecast_router,  prefix="/api/forecast")
 
 
 @app.get("/")

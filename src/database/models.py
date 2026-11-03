@@ -235,6 +235,34 @@ class JobEvent(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class Prediction(Base):
+    """A scenario forecast made at a point in time, later resolved against the real outcome.
+
+    Never edited after creation except to record the outcome — this table is the
+    model's public track record.
+    """
+    __tablename__ = "predictions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    asset_class = Column(String, nullable=False)
+    horizon = Column(String, nullable=False)                # '3m' | '1y'
+    horizon_bars = Column(Integer, nullable=False)
+    model_version = Column(String, nullable=False)
+    made_at = Column(DateTime, nullable=False, index=True)  # naive UTC
+    due_at = Column(DateTime, nullable=False, index=True)
+    price_at = Column(Float, nullable=False)
+    probs = Column(JSON, nullable=False)                    # {scenario: probability}
+    base_probs = Column(JSON, nullable=False)               # unconditional benchmark, same buckets
+    quantiles = Column(JSON, nullable=True)
+    features = Column(JSON, nullable=True)
+    n_samples = Column(Integer, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    outcome_price = Column(Float, nullable=True)
+    outcome_return = Column(Float, nullable=True)
+    outcome_scenario = Column(String, nullable=True)
+
+
 # ─── Initialization ───────────────────────────────────────────────────────────
 
 def init_db():
