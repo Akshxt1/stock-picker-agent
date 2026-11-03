@@ -7,11 +7,13 @@ Railway:      uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
 import os
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.database.models import init_db
+from src.api.logging_config import configure_logging
+from src.api.ratelimit import RateLimitMiddleware
 
 from src.api.routes.crew      import router as crew_router
 from src.api.routes.picks     import router as picks_router
@@ -22,19 +24,9 @@ from src.api.routes.universe  import router as universe_router
 from src.api.routes.admin     import router as admin_router
 from src.api.routes.stock     import router as stock_router
 
-# ── Logging to file ───────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────────
 
-LOG_DIR = Path(__file__).parents[2] / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_DIR / "app.log", encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
+configure_logging()
 logger = logging.getLogger("stockpicker")
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -43,13 +35,19 @@ logger = logging.getLogger("stockpicker")
 async def lifespan(app: FastAPI):
     from src.database.models import engine
     init_db()
-    # Print (not just log) so the active DB backend is always visible in Railway
-    # logs — confirms whether Postgres or the ephemeral SQLite fallback is in use.
+    # Print (not just log) so the active DB backend is always visible in host
+    # logs — confirms Postgres vs. the ephemeral SQLite dev fallback.
     print(f"StockPicker API started — DB backend: {engine.url.get_backend_name()} "
           f"(host={engine.url.host or 'local file'})", flush=True)
+    stop_workers = None
+    if os.getenv("JOB_WORKER_MODE", "embedded").lower() == "embedded":
+        from src.jobs.worker import start_embedded_workers
+        stop_workers = start_embedded_workers()
     yield
+    if stop_workers:
+        stop_workers.set()
 
-app = FastAPI(title="StockPicker API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="StockPicker API", version="2.1.0", lifespan=lifespan)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 
@@ -64,6 +62,7 @@ if not _allow_credentials:
     logger.warning("ALLOWED_ORIGINS contains '*'; disabling credentialed CORS. "
                    "Set explicit origins in production.")
 
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -87,3 +86,24 @@ app.include_router(stock_router,     prefix="/api/stock")
 @app.get("/")
 def root():
     return {"status": "ok", "service": "StockPicker API v2"}
+
+
+@app.get("/health")
+def health():
+    """Liveness: the process is up. Never touches the DB, so it can't flap."""
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready():
+    """Readiness: the DB answers and the job queue is readable."""
+    from sqlalchemy import text, func
+    from src.database.models import Session, Job
+    try:
+        with Session() as sess:
+            sess.execute(text("SELECT 1"))
+            queued = sess.query(func.count(Job.id)).filter(Job.status == "queued").scalar()
+    except Exception as e:
+        logger.error("readiness check failed: %s", e)
+        return JSONResponse({"status": "unavailable"}, status_code=503)
+    return {"status": "ready", "queued_jobs": queued}

@@ -5,6 +5,7 @@ description = "AI multi-agent stock research + paper-trading API (FastAPI backen
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.13.0",
     "anthropic>=0.104.1",
     "crewai>=1.14.5",
     "crewai-tools>=1.14.5",
@@ -21,6 +22,16 @@ dependencies = [
     "supabase>=2.31.0",
     "yfinance>=1.3.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+python_files = ["test_*.py"]
 
 [build-system]
 requires = ["hatchling"]

@@ -23,9 +23,16 @@ if not DB_URL:
     # like ${{Postgres.DATABASE_URL}} fails to resolve (wrong service name).
     # Fall back to SQLite so the app boots instead of crash-looping — but shout
     # about it, because on Railway that SQLite file is ephemeral and wipes.
+    if os.getenv("APP_ENV", "").strip().lower() == "production":
+        # Never silently run production on a throwaway file DB — that is how
+        # data quietly disappears after a redeploy.
+        raise RuntimeError(
+            "APP_ENV=production but DATABASE_URL is unset/empty. Set it to a "
+            "persistent Postgres URL (refusing to fall back to ephemeral SQLite)."
+        )
     if "DATABASE_URL" in os.environ:
         logger.warning(
-            "DATABASE_URL is set but empty — your Railway/host variable reference "
+            "DATABASE_URL is set but empty — your host variable reference "
             "did not resolve. Falling back to ephemeral SQLite (data will NOT persist)."
         )
     DB_URL = _SQLITE_FALLBACK
@@ -196,61 +203,42 @@ class UserProfile(Base):
     last_seen = Column(DateTime, nullable=True)
     tutorial_seen = Column(Boolean, default=False)
 
+class Job(Base):
+    """A durable unit of background work (crew run, deep analysis, ...)."""
+    __tablename__ = "jobs"
+
+    id = Column(String, primary_key=True)                   # uuid4 hex
+    user_id = Column(String, nullable=False, index=True)
+    username = Column(String, nullable=True)
+    kind = Column(String, nullable=False)                   # 'market_scan' | 'deep_analysis'
+    params = Column(JSON, nullable=False, default=dict)
+    status = Column(String, nullable=False, default="queued", index=True)  # queued|running|done|error
+    result = Column(JSON, nullable=True)
+    error = Column(String, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    refunded = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class JobEvent(Base):
+    """Append-only progress events for a job; the SSE endpoint tails these."""
+    __tablename__ = "job_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String, nullable=False, index=True)
+    payload = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 # ─── Initialization ───────────────────────────────────────────────────────────
 
 def init_db():
-    """Create all tables if they don't exist, then run additive column migrations."""
-    Base.metadata.create_all(engine)
-    _migrate_add_columns()
-
-
-def _migrate_add_columns():
-    """Idempotently add new nullable columns to existing tables.
-
-    create_all() never ALTERs an existing table, so for databases created
-    before these columns were introduced we add them by hand. Safe to run
-    on every startup — each column is only added if missing.
-    """
-    from sqlalchemy import inspect, text
-
-    additions = {
-        "picks": {
-            "roe": "VARCHAR",
-            "debt_to_equity": "VARCHAR",
-            "revenue_growth": "VARCHAR",
-            "pe_ratio": "VARCHAR",
-            "run_by_username": "VARCHAR",
-        },
-        "portfolio": {
-            "target_price": "FLOAT",
-            "stop_loss": "FLOAT",
-            "recommendation": "VARCHAR",
-            "analysis_summary": "VARCHAR",
-            "why_buy": "JSON",
-            "why_not_buy": "JSON",
-            "analyzed_at": "DATETIME",
-        },
-        "user_profiles": {
-            "weekly_portfolio_runs": "INTEGER DEFAULT 0",
-            "notification_email": "VARCHAR",
-            "tutorial_seen": "BOOLEAN DEFAULT FALSE",
-        },
-    }
-
-    try:
-        inspector = inspect(engine)
-        existing_tables = set(inspector.get_table_names())
-        with engine.begin() as conn:
-            for table, cols in additions.items():
-                if table not in existing_tables:
-                    continue
-                have = {c["name"] for c in inspector.get_columns(table)}
-                for col, sqltype in cols.items():
-                    if col not in have:
-                        conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {sqltype}'))
-    except Exception as e:
-        # Migration is best-effort; never block startup on it.
-        print(f"  [migrate] skipped: {e}")
+    """Bring the schema to the latest Alembic revision."""
+    from src.database.migrate import upgrade_to_head
+    upgrade_to_head()
 
 
 # ─── Cost Calculators ─────────────────────────────────────────────────────────
@@ -518,66 +506,71 @@ def clear_user_picks(user_id: str) -> int:
         return count
 
 
-def increment_run_count(user_id: str) -> bool:
-    """Increment weekly crew (market-scan) run count. True if allowed, False if at limit."""
+def _roll_week(sess, user_id: str) -> None:
+    """Reset a user's weekly counters if a new week has started (idempotent)."""
     from datetime import date
+    from sqlalchemy import update
     week_start = date.today().strftime("%Y-W%W")
+    sess.execute(
+        update(UserProfile)
+        .where(UserProfile.user_id == user_id,
+               (UserProfile.week_start.is_(None)) | (UserProfile.week_start != week_start))
+        .values(weekly_runs=0, weekly_portfolio_runs=0, week_start=week_start)
+    )
+
+
+def _claim_quota(user_id: str, column, limit_key: str) -> bool:
+    """Atomically take one unit of quota. The limit check and the increment are
+    a single conditional UPDATE, so concurrent requests cannot overshoot it."""
+    from sqlalchemy import update, func
     with Session() as sess:
         profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
         if not profile:
             return True  # unknown user, allow
-        if profile.week_start != week_start:
-            profile.weekly_runs = 0
-            profile.weekly_portfolio_runs = 0
-            profile.week_start  = week_start
-        limits = ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"])
-        if profile.weekly_runs >= limits["crew_runs"]:
-            return False
-        profile.weekly_runs += 1
+        limit = ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"])[limit_key]
+        _roll_week(sess, user_id)
+        res = sess.execute(
+            update(UserProfile)
+            .where(UserProfile.user_id == user_id, func.coalesce(column, 0) < limit)
+            .values({column.key: func.coalesce(column, 0) + 1})
+        )
         sess.commit()
-        return True
+        return res.rowcount == 1
+
+
+def _refund_quota(user_id: str, column) -> None:
+    from sqlalchemy import update, func
+    with Session() as sess:
+        sess.execute(
+            update(UserProfile)
+            .where(UserProfile.user_id == user_id, func.coalesce(column, 0) > 0)
+            .values({column.key: func.coalesce(column, 0) - 1})
+        )
+        sess.commit()
+
+
+def increment_run_count(user_id: str) -> bool:
+    """Take one weekly crew (market-scan) run. True if allowed, False if at limit."""
+    return _claim_quota(user_id, UserProfile.weekly_runs, "crew_runs")
 
 
 def increment_portfolio_run_count(user_id: str) -> bool:
-    """Increment weekly deep/portfolio analysis count. True if allowed, False if at limit.
+    """Take one weekly deep/portfolio analysis run. True if allowed, False if at limit.
 
     Used by single-stock Deep Analysis and portfolio-level analysis — both draw
     from the account's `portfolio_runs` weekly quota.
     """
-    from datetime import date
-    week_start = date.today().strftime("%Y-W%W")
-    with Session() as sess:
-        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-        if not profile:
-            return True
-        if profile.week_start != week_start:
-            profile.weekly_runs = 0
-            profile.weekly_portfolio_runs = 0
-            profile.week_start  = week_start
-        limits = ACCOUNT_LIMITS.get(profile.account_type, ACCOUNT_LIMITS["trial"])
-        if (profile.weekly_portfolio_runs or 0) >= limits["portfolio_runs"]:
-            return False
-        profile.weekly_portfolio_runs = (profile.weekly_portfolio_runs or 0) + 1
-        sess.commit()
-        return True
+    return _claim_quota(user_id, UserProfile.weekly_portfolio_runs, "portfolio_runs")
 
 
 def decrement_run_count(user_id: str) -> None:
     """Refund one weekly crew run (e.g. the run errored before producing anything)."""
-    with Session() as sess:
-        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-        if profile and (profile.weekly_runs or 0) > 0:
-            profile.weekly_runs -= 1
-            sess.commit()
+    _refund_quota(user_id, UserProfile.weekly_runs)
 
 
 def decrement_portfolio_run_count(user_id: str) -> None:
     """Refund one weekly deep/portfolio analysis run."""
-    with Session() as sess:
-        profile = sess.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-        if profile and (profile.weekly_portfolio_runs or 0) > 0:
-            profile.weekly_portfolio_runs -= 1
-            sess.commit()
+    _refund_quota(user_id, UserProfile.weekly_portfolio_runs)
 
 
 def get_all_user_profiles() -> list:

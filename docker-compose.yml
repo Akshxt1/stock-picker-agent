@@ -1,0 +1,49 @@
+# Full backend stack: Postgres + API + (optional) dedicated job worker.
+#   docker compose up --build              # API with embedded workers
+#   docker compose --profile worker up     # API (no workers) + separate worker container
+# Secrets come from a local .env file (see .env.example).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stockpicker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpicker}
+      POSTGRES_DB: stockpicker
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stockpicker"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql://stockpicker:${POSTGRES_PASSWORD:-stockpicker}@db:5432/stockpicker
+      JOB_WORKER_MODE: ${JOB_WORKER_MODE:-embedded}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    profiles: ["worker"]
+    env_file: .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql://stockpicker:${POSTGRES_PASSWORD:-stockpicker}@db:5432/stockpicker
+    command: ["python", "-m", "src.jobs.worker"]
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

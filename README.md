@@ -8,7 +8,7 @@
 ![Next.js](https://img.shields.io/badge/Next.js-14-black?style=flat-square&logo=nextdotjs)
 ![CrewAI](https://img.shields.io/badge/CrewAI-Multi--Agent-purple?style=flat-square)
 ![Claude](https://img.shields.io/badge/Claude-Sonnet%204.6%20%7C%20Opus%204.8-orange?style=flat-square)
-![Railway](https://img.shields.io/badge/Railway-Postgres-0B0D0E?style=flat-square&logo=railway)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker)
 
 ---
 
@@ -60,7 +60,8 @@ Market Data  Upstox (India — primary) · yfinance (India supplement + US fallb
              Finnhub (US primary) · TwelveData / Alpha Vantage (fallbacks)
              pandas-ta (technical indicators)
 Auth         Supabase (email/password, JWT)
-Database     SQLite (local dev) / Railway Postgres (prod) via SQLAlchemy
+Database     SQLite (local dev) / Postgres (prod: Neon, Supabase, any) via SQLAlchemy + Alembic
+Jobs         Durable DB-backed job queue + workers (embedded or separate process)
 ```
 
 **India data flow:** `Upstox → yfinance (Market Cap / D/E supplement) → TwelveData → Alpha Vantage`
@@ -98,7 +99,10 @@ stock-picker-agent/
 │   ├── data/stock_universe.py   # sectors / cap-size buckets
 │   └── database/                # SQLAlchemy models + paper-trading logic
 ├── frontend/                    # Next.js app (app/, components/, lib/)
-├── railway.toml                 # Railway deploy config
+├── Dockerfile / docker-compose.yml
+├── alembic/                     # database migrations
+├── src/jobs/                    # durable job queue, runner, worker
+├── railway.toml                 # optional Railway config
 ├── run_api.ps1                  # local dev: uvicorn with --reload-dir src
 └── pyproject.toml
 ```
@@ -113,6 +117,7 @@ stock-picker-agent/
 git clone https://github.com/Akshxt1/stock-picker-agent.git
 cd stock-picker-agent
 uv sync                       # install Python deps from uv.lock
+uv run pytest                 # run the test suite
 ```
 
 Create a `.env` in the project root (see `.env.example`):
@@ -127,7 +132,7 @@ FINNHUB_API_KEY=...                   # US quotes/fundamentals/news
 # optional fallbacks
 TWELVE_DATA_API_KEY=...
 ALPHA_VANTAGE_API_KEY=...
-# DATABASE_URL is NOT committed — Railway injects it automatically
+# DATABASE_URL is NOT committed — set it in your host (required in production)
 # Leave unset locally to use SQLite; set to a Postgres URL for a local Postgres
 ```
 
@@ -149,7 +154,7 @@ API runs at `http://localhost:8000` (`/docs` for the OpenAPI UI). The startup lo
 
 ```
 StockPicker API started — DB backend: sqlite (host=local file)   ← local
-StockPicker API started — DB backend: postgresql (host=postgres.railway.internal)  ← Railway
+StockPicker API started — DB backend: postgresql (host=<your-db-host>)  ← production
 ```
 
 ### 2. Frontend
@@ -237,7 +242,9 @@ All protected routes require a Supabase `Authorization: Bearer <jwt>` header.
 | `FINNHUB_API_KEY` | Recommended | US quotes, fundamentals, company news |
 | `TWELVE_DATA_API_KEY` | Optional | Quote/history fallback |
 | `ALPHA_VANTAGE_API_KEY` | Optional | Quote/history fallback |
-| `DATABASE_URL` | Injected by Railway | Postgres URL for prod. **Never commit this.** Omit locally to use SQLite. If the variable resolves to an empty string, the app warns and falls back to SQLite automatically. |
+| `DATABASE_URL` | Required in production | Postgres URL. **Never commit this.** Omit locally (with `APP_ENV=development`) to use SQLite. Production refuses to start without it. |
+| `JOB_WORKER_MODE` | Optional | `embedded` (default) or `external` (run `python -m src.jobs.worker` separately) |
+| `LOG_FORMAT` / `TRUST_PROXY` / `RATE_LIMIT_ENABLED` | Optional | `json` logs; trust `X-Forwarded-For`; toggle the per-IP rate limiter |
 | `ALLOWED_ORIGINS` | Optional | Comma-separated list of frontend origins for CORS (defaults to `http://localhost:3000`) |
 | `NEXT_PUBLIC_API_URL` | Optional | Frontend → API base URL (defaults to `http://localhost:8000`) |
 
@@ -261,43 +268,32 @@ INDIA_QUOTE_PROVIDER_ORDER=upstox,yfinance,twelvedata,alphavantage
 | `transactions` | Buy/sell history |
 | `api_usage` | Token usage & cost per user/run |
 | `market_data_cache` | Cached provider responses (quote/history/fundamentals) |
+| `jobs` / `job_events` | Durable background runs and their replayable progress events |
 
 ---
 
 ## Deployment
 
-### Backend — Railway
+The backend ships as a Docker image; see **[docs/deployment.md](docs/deployment.md)** for the architecture,
+free/cheap hosting options, health checks and backups.
 
-The backend deploys on **Railway** (`railway.toml`):
-
-```toml
-[deploy]
-startCommand = "uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
+```bash
+docker compose up --build        # Postgres + API (with embedded job workers) on :8000
 ```
 
-**Database persistence:** Add a Railway **Postgres** service to your project. In your app service → Variables, add:
-
-```
-DATABASE_URL = ${{Postgres.DATABASE_URL}}
-```
-
-Railway resolves this reference automatically. The app uses `pool_pre_ping=True` to recycle stale connections on redeploy.
-
-**All other env vars** (API keys, Supabase credentials, `ALLOWED_ORIGINS`) are set in Railway → Variables. `DATABASE_URL` is **never** committed to the repo.
+In `APP_ENV=production` the API refuses to start without `DATABASE_URL`, so data can never silently land on
+throwaway SQLite. Migrations (Alembic) run on startup. AI runs execute as durable jobs: a dropped connection
+or restart does not lose them (`GET /api/crew/jobs/{id}` and `/jobs/{id}/stream`).
 
 ### Frontend — Vercel (or any static host)
 
-Deploy the `frontend/` directory with:
-
-```
-NEXT_PUBLIC_API_URL=https://your-api.railway.app
-```
+Deploy the `frontend/` directory with `NEXT_PUBLIC_API_URL=https://your-api-host`.
 
 ---
 
 ## Known Limitations
 
-- **Upstox token refresh** — the Analytics Token is long-lived but not permanent; rotate it in Railway Variables when it expires.
+- **Upstox token refresh** — the Analytics Token is long-lived but not permanent; rotate it in your host's environment variables when it expires.
 - **yfinance as supplement** — Market Cap and Debt/Equity for Indian stocks come from a cached yfinance call (24h TTL). May show `—` briefly if yfinance rate-limits.
 - **Finnhub free tier** — covers US fully; Indian (NSE) symbols return 403, so India stays on Upstox/yfinance. Finnhub daily candles are paid-tier, so US history uses yfinance.
 - **Paper trading only** — no brokerage integration; prices may be ~15 min delayed.

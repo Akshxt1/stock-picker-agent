@@ -2,284 +2,151 @@
 src/api/routes/crew.py
 
 GET /api/crew/stream?market=INDIA&sector=Telecom&size=Mid
-  → Server-Sent Events stream.
-    The frontend reads this like a chat stream (same idea as ChatGPT).
+GET /api/crew/stock-stream?ticker=RELIANCE.NS
+  → enqueue a durable job and stream its progress as Server-Sent Events.
+
+GET /api/crew/jobs/{id}          → job status/result (poll this if SSE drops)
+GET /api/crew/jobs/{id}/stream   → re-attach to a running job's event stream
+
+The analysis itself runs in a worker (see src/jobs), not in the request, so a
+dropped connection or an API restart no longer kills the run. Events are
+replayed from the database, so reconnecting resumes where the client left off.
 
 Each SSE event is a JSON object:
-  { "type": "agent",    "agent": "Researcher",  "text": "Calling discover_stocks..." }
-  { "type": "task",     "task": "Task 1 done",  "text": "Found 10 stocks..."        }
-  { "type": "done",     "picks": [...]                                               }
-  { "type": "error",    "text": "Something went wrong"                              }
+  { "type": "step",  "agent": "Researcher", "kind": "tool", "text": "..." }
+  { "type": "task",  "agent": "Researcher", "text": "Researcher finished." }
+  { "type": "done",  "result": {...} }
+  { "type": "error", "text": "Something went wrong" }
 """
 
 import json
-import queue
+import time
 import logging
-import threading
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 
-from src.agents.crew import run_stock_picker, run_single_stock_analysis
 from src.api.routes.auth import get_current_user
+from src.jobs import service
 
 logger = logging.getLogger("stockpicker.crew")
 
 router = APIRouter()
 
-
-_PHASES = ["Researcher", "Data Analyst", "Sentiment Analyst", "Master Analyst"]
-
-
-import re as _re
-
-
-def _clean_md(text: str, limit: int = 180) -> str:
-    """Strip markdown noise (##, **, ---, tables, backticks) → a short clean line."""
-    t = str(text)
-    t = _re.sub(r"```.*?```", " ", t, flags=_re.DOTALL)      # code blocks
-    t = t.replace("\\n", " ")
-    t = _re.sub(r"[#*`>|]+", " ", t)                         # md markers + table pipes
-    t = _re.sub(r"-{2,}", " ", t)                            # horizontal rules
-    t = _re.sub(r"\s+", " ", t).strip()
-    return t[:limit] + ("…" if len(t) > limit else "")
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",   # tells nginx NOT to buffer SSE
+}
+POLL_SECONDS = 0.5
+KEEPALIVE_SECONDS = 15
+MAX_STREAM_SECONDS = 20 * 60
 
 
-def _format_step(step_output) -> dict:
-    """Turn a raw CrewAI step into a clean {kind, tool, text} payload."""
-    tool       = getattr(step_output, "tool", None)
-    tool_input = getattr(step_output, "tool_input", None)
-    thought    = (getattr(step_output, "thought", None) or "").strip()
-    output     = getattr(step_output, "output", None)
-
-    if tool:
-        ti = str(tool_input).strip() if tool_input else ""
-        ti = ti.strip("{}").replace('"', "").replace("'", "")
-        return {"kind": "tool", "tool": str(tool), "text": (ti[:120] if ti else "")}
-    if output:
-        return {"kind": "answer", "tool": None, "text": _clean_md(output, 220)}
-    if thought:
-        return {"kind": "thought", "tool": None, "text": _clean_md(thought, 160)}
-    return {"kind": "thought", "tool": None, "text": _clean_md(step_output, 140)}
+def _sse(payload: dict) -> str:
+    return "data: " + json.dumps(payload) + "\n\n"
 
 
-def _make_callbacks(msg_queue: queue.Queue):
-    """Build (step_callback, task_callback) that emit clean, agent-labelled events.
+def _job_event_stream(job_id: str):
+    """Tail a job's events until it finishes. Safe to call again after a disconnect."""
+    last_id = 0
+    started = last_ping = time.monotonic()
+    while time.monotonic() - started < MAX_STREAM_SECONDS:
+        events = service.events_after(job_id, last_id)
+        for event_id, payload in events:
+            last_id = event_id
+            yield _sse(payload)
+            if payload.get("type") in ("done", "error"):
+                return
+        if not events:
+            job = service.get_job(job_id)
+            if job and job["status"] in ("done", "error") and not service.events_after(job_id, last_id):
+                # Terminal job whose final event is missing (e.g. pre-migration): synthesize it.
+                if job["status"] == "done":
+                    yield _sse({"type": "done", "result": job["result"] or {}})
+                else:
+                    yield _sse({"type": "error", "text": job["error"] or "Run failed"})
+                return
+            if time.monotonic() - last_ping > KEEPALIVE_SECONDS:
+                last_ping = time.monotonic()
+                yield ": keepalive\n\n"
+            time.sleep(POLL_SECONDS)
+    yield _sse({"type": "error", "text": "Timed out waiting for the run to finish"})
 
-    Phase tracking lets us attribute steps to the right agent even when CrewAI
-    doesn't attach the agent to a step.
-    """
-    state = {"phase": 0}
 
-    def step_callback(step_output):
-        try:
-            payload = _format_step(step_output)
-            payload["type"]  = "step"
-            payload["agent"] = _PHASES[min(state["phase"], len(_PHASES) - 1)]
-            msg_queue.put(payload)
-        except Exception:
-            pass
-
-    def task_callback(task_output):
-        try:
-            done_agent = _PHASES[min(state["phase"], len(_PHASES) - 1)]
-            state["phase"] += 1
-            msg_queue.put({"type": "task", "agent": done_agent, "text": f"{done_agent} finished."})
-        except Exception:
-            pass
-
-    return step_callback, task_callback
+def _guard_and_claim(user: dict, claim, limit_key: str, label: str) -> None:
+    """Reject guests, then atomically take one unit of the weekly quota."""
+    from src.database.models import ACCOUNT_LIMITS
+    account_type = user.get("account_type", "trial")
+    if account_type == "guest":
+        raise HTTPException(status_code=403, detail="Guest accounts cannot run analysis. Please sign up.")
+    try:
+        allowed = claim(user["user_id"])
+    except Exception:
+        # Fail closed: a broken quota check must not become unlimited free LLM spend.
+        logger.exception("Quota check failed for %s", user.get("user_id"))
+        raise HTTPException(status_code=503, detail="Could not verify your usage quota. Please retry shortly.")
+    if not allowed:
+        limit = ACCOUNT_LIMITS.get(account_type, {}).get(limit_key, 0)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Weekly {label} limit reached ({limit} for {account_type} plan). Resets next Monday.",
+        )
 
 
-def _crew_event_stream(market: str, sector: str, size: str,
-                       user_id: str, username: str, refund=None):
-    """
-    Runs the CrewAI pipeline in a background thread and yields SSE events
-    as the agents work. Exactly like how ChatGPT streams its response.
-
-    `refund` (if given) is called once if the run ends in an error/timeout
-    before producing results, so the user isn't charged a weekly run for a
-    failed analysis.
-    """
-    msg_queue: queue.Queue = queue.Queue()
-    step_callback, task_callback = _make_callbacks(msg_queue)
-
-    # ── Run crew in a separate thread so we don't block FastAPI ──────────────
-    def run_thread():
-        try:
-            result = run_stock_picker(
-                market, sector, size,
-                user_id=user_id,
-                username=username,
-                step_callback=step_callback,
-                task_callback=task_callback,
-            )
-            # Persist picks per run (tagged with market/date/user) and emit the
-            # normalized, DB-backed picks so the UI can make them clickable.
-            try:
-                from src.database.paper_trading import save_picks
-                saved = save_picks(result, run_by_user_id=user_id, run_by_username=username)
-                if saved:
-                    result["picks"] = saved
-            except Exception as e:
-                print(f"  [save_picks] {e}")
-            msg_queue.put({"type": "done", "result": result})
-        except Exception as e:
-            msg_queue.put({"type": "error", "text": str(e)})
-
-    thread = threading.Thread(target=run_thread, daemon=True)
-    thread.start()
-
-    # ── Yield SSE events until crew finishes ─────────────────────────────────
-    # SSE format: each message is  "data: <json>\n\n"
-    while True:
-        try:
-            msg = msg_queue.get(timeout=360)   # 6-minute safety timeout
-        except queue.Empty:
-            if refund:
-                try: refund()
-                except Exception: pass
-            yield "data: " + json.dumps({"type": "error", "text": "Timed out"}) + "\n\n"
-            break
-
-        if msg["type"] == "error" and refund:
-            try: refund()
-            except Exception: pass
-
-        yield "data: " + json.dumps(msg) + "\n\n"
-
-        if msg["type"] in ("done", "error"):
-            break
+def _enqueue_or_refund(user: dict, kind: str, params: dict) -> str:
+    try:
+        return service.enqueue(kind, user["user_id"], user.get("name"), params)
+    except Exception:
+        logger.exception("Could not enqueue %s job", kind)
+        service.refund_quota(user["user_id"], kind)
+        raise HTTPException(status_code=503, detail="Could not start the run. Please retry shortly.")
 
 
 @router.get("/stream")
 def stream_crew(
-    market:   str = Query(...),
-    sector:   str = Query(...),
-    size:     str = Query(...),
-    user      = Depends(get_current_user),
+    market: str = Query(...),
+    sector: str = Query(...),
+    size:   str = Query(...),
+    user = Depends(get_current_user),
 ):
-    """
-    Streams crew analysis as Server-Sent Events.
-    Enforces per-account weekly run limits before starting.
-    """
-    # Rate limit check
-    account_type = user.get("account_type", "trial")
-    if account_type == "guest":
-        raise HTTPException(status_code=403, detail="Guest accounts cannot run analysis. Please sign up.")
-
-    try:
-        from src.database.models import increment_run_count
-        allowed = increment_run_count(user["user_id"])
-        if not allowed:
-            from src.database.models import ACCOUNT_LIMITS
-            limit = ACCOUNT_LIMITS.get(account_type, {}).get("crew_runs", 0)
-            raise HTTPException(
-                status_code=429,
-                detail=f"Weekly run limit reached ({limit} runs for {account_type} plan). Resets next Monday."
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        # If the DB check fails we allow the run, but log it so quota-bypass is visible.
-        logger.warning("Run-limit check failed for %s, allowing run: %s", user.get("user_id"), e)
-
-    def _refund():
-        from src.database.models import decrement_run_count
-        decrement_run_count(user["user_id"])
-
-    return StreamingResponse(
-        _crew_event_stream(
-            market, sector, size,
-            user_id=user["user_id"],
-            username=user["name"],
-            refund=_refund,
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # tells nginx NOT to buffer SSE
-        },
-    )
-
-
-# ── Single-stock Deep Analysis (full crew on one ticker) ──────────────────────
-
-def _single_stock_event_stream(ticker: str, user_id: str, username: str, refund=None):
-    """Runs the 4-agent crew on ONE ticker and streams clean SSE events."""
-    msg_queue: queue.Queue = queue.Queue()
-    step_callback, task_callback = _make_callbacks(msg_queue)
-
-    def run_thread():
-        try:
-            result = run_single_stock_analysis(
-                ticker, user_id=user_id, username=username,
-                step_callback=step_callback, task_callback=task_callback,
-            )
-            # Persist the brief so the stock's AI tab shows it afterwards.
-            try:
-                from src.database.paper_trading import save_picks
-                saved = save_picks(result, run_by_user_id=user_id, run_by_username=username)
-                if saved:
-                    result["picks"] = saved
-            except Exception as e:
-                print(f"  [save_picks/deep] {e}")
-            msg_queue.put({"type": "done", "result": result})
-        except Exception as e:
-            msg_queue.put({"type": "error", "text": str(e)})
-
-    thread = threading.Thread(target=run_thread, daemon=True)
-    thread.start()
-
-    while True:
-        try:
-            msg = msg_queue.get(timeout=360)
-        except queue.Empty:
-            if refund:
-                try: refund()
-                except Exception: pass
-            yield "data: " + json.dumps({"type": "error", "text": "Timed out"}) + "\n\n"
-            break
-        if msg["type"] == "error" and refund:
-            try: refund()
-            except Exception: pass
-        yield "data: " + json.dumps(msg) + "\n\n"
-        if msg["type"] in ("done", "error"):
-            break
+    """Run a market scan. Enforces per-account weekly run limits before starting."""
+    from src.database.models import increment_run_count
+    _guard_and_claim(user, increment_run_count, "crew_runs", "run")
+    job_id = _enqueue_or_refund(user, "market_scan",
+                                {"market": market, "sector": sector, "size": size})
+    return StreamingResponse(_job_event_stream(job_id), media_type="text/event-stream",
+                             headers={**SSE_HEADERS, "X-Job-Id": job_id})
 
 
 @router.get("/stock-stream")
 def stream_single_stock(
     ticker: str = Query(...),
-    user    = Depends(get_current_user),
+    user = Depends(get_current_user),
 ):
-    """Streams a full 4-agent Deep Analysis for one ticker.
+    """Run a full 4-agent Deep Analysis on one ticker (1 unit of the weekly deep quota)."""
+    from src.database.models import increment_portfolio_run_count
+    _guard_and_claim(user, increment_portfolio_run_count, "portfolio_runs", "analysis")
+    job_id = _enqueue_or_refund(user, "deep_analysis", {"ticker": ticker})
+    return StreamingResponse(_job_event_stream(job_id), media_type="text/event-stream",
+                             headers={**SSE_HEADERS, "X-Job-Id": job_id})
 
-    Counts as 1 against the account's weekly portfolio/deep-analysis quota.
-    """
-    account_type = user.get("account_type", "trial")
-    if account_type == "guest":
-        raise HTTPException(status_code=403, detail="Guest accounts cannot run analysis. Please sign up.")
 
-    try:
-        from src.database.models import increment_portfolio_run_count, ACCOUNT_LIMITS
-        if not increment_portfolio_run_count(user["user_id"]):
-            limit = ACCOUNT_LIMITS.get(account_type, {}).get("portfolio_runs", 0)
-            raise HTTPException(
-                status_code=429,
-                detail=f"Weekly analysis limit reached ({limit} deep/portfolio runs for {account_type} plan). Resets next Monday."
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning("Deep-analysis limit check failed for %s, allowing run: %s", user.get("user_id"), e)
+def _owned_job(job_id: str, user: dict) -> dict:
+    job = service.get_job(job_id)
+    if not job or (job["user_id"] != user["user_id"] and user.get("account_type") != "admin"):
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
-    def _refund():
-        from src.database.models import decrement_portfolio_run_count
-        decrement_portfolio_run_count(user["user_id"])
 
-    return StreamingResponse(
-        _single_stock_event_stream(ticker, user_id=user["user_id"], username=user["name"], refund=_refund),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+@router.get("/jobs/{job_id}")
+def get_job(job_id: str, user = Depends(get_current_user)):
+    job = _owned_job(job_id, user)
+    job.pop("user_id", None)
+    return job
+
+
+@router.get("/jobs/{job_id}/stream")
+def stream_job(job_id: str, user = Depends(get_current_user)):
+    _owned_job(job_id, user)
+    return StreamingResponse(_job_event_stream(job_id), media_type="text/event-stream",
+                             headers={**SSE_HEADERS, "X-Job-Id": job_id})

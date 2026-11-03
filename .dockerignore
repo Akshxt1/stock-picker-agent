@@ -1,0 +1,12 @@
+.git
+.github
+.claude
+.venv
+**/__pycache__
+frontend
+Logo
+logs
+*.db
+.env
+tests
+docs
