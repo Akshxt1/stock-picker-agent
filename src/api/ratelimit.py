@@ -17,6 +17,8 @@ EXEMPT_PATHS = {"/", "/health", "/ready"}
 LIMITS = [
     ("/api/auth/", (20, 60)),     # login / signup brute-force protection
     ("/api/crew/", (10, 60)),     # these start paid LLM work
+    ("/api/portfolio-agent/jobs/", (90, 60)),   # status polling while a plan is written
+    ("/api/portfolio-agent/", (12, 60)),   # uploads and AI strategies
     ("/api/",      (240, 60)),
 ]
 

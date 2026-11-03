@@ -225,6 +225,10 @@ GET  /api/forecast?symbol=&horizon=3m|1y             # scenario odds: crash / de
 GET  /api/forecast/backtest?symbol=&horizon=            # walk-forward score vs base rate on that asset's history
 GET  /api/forecast/track-record                         # live score of every resolved logged prediction
 GET  /api/forecast/explain?symbol=&horizon=             # AI bull/bear case grounded in the forecast data (needs ANTHROPIC_API_KEY; cached 12h)
+POST /api/portfolio-agent/parse                 # upload screenshot/PDF/CSV/XLSX -> draft holdings matched to real symbols (not stored)
+POST /api/portfolio-agent/analyze               # confirmed holdings -> live P&L, risk, correlation, goal simulation (no AI)
+POST /api/portfolio-agent/strategy              # -> {job_id}; AI plan grounded in that analysis (1 weekly portfolio run)
+GET  /api/portfolio-agent/jobs/{id}             # poll the strategy job (refunded automatically on failure)
 GET  /api/picks?market=                         # current user's saved picks
 GET  /api/portfolio?market=                     # holdings w/ live price + P&L
 POST /api/portfolio/{id}/analyze                # quick per-holding verdict
@@ -251,6 +255,7 @@ All protected routes require a Supabase `Authorization: Bearer <jwt>` header.
 | `TWELVE_DATA_API_KEY` | Optional | Quote/history fallback |
 | `ALPHA_VANTAGE_API_KEY` | Optional | Quote/history fallback |
 | `COINGECKO_API_KEY` | Optional | Free CoinGecko demo key; raises crypto rate limits (public API works without it) |
+| `PORTFOLIO_EXTRACT_MODEL` / `PORTFOLIO_STRATEGY_MODEL` | Optional | Override the Claude models used to read uploads (default Sonnet for images/PDFs, Haiku for CSV/XLSX) and write strategies (default Sonnet) |
 | `SENTIMENT_SHADOW` | Optional | `true` logs Claude-scored news sentiment with each forecast (needs `ANTHROPIC_API_KEY`); logged only, never changes the odds |
 | `DATABASE_URL` | Required in production | Postgres URL. **Never commit this.** Omit locally (with `APP_ENV=development`) to use SQLite. Production refuses to start without it. |
 | `JOB_WORKER_MODE` | Optional | `embedded` (default) or `external` (run `python -m src.jobs.worker` separately) |

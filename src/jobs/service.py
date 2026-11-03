@@ -112,7 +112,7 @@ def refund_quota(user_id: str, kind: str) -> None:
     from src.database.models import decrement_run_count, decrement_portfolio_run_count
     if kind == "market_scan":
         decrement_run_count(user_id)
-    elif kind == "deep_analysis":
+    elif kind in ("deep_analysis", "portfolio_strategy"):
         decrement_portfolio_run_count(user_id)
 
 

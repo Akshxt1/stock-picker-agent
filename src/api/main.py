@@ -25,6 +25,7 @@ from src.api.routes.admin     import router as admin_router
 from src.api.routes.stock     import router as stock_router
 from src.api.routes.assets    import router as assets_router
 from src.api.routes.forecast  import router as forecast_router
+from src.api.routes.portfolio_agent import router as portfolio_agent_router
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,7 @@ app.include_router(admin_router,     prefix="/api/admin")
 app.include_router(stock_router,     prefix="/api/stock")
 app.include_router(assets_router,    prefix="/api/assets")
 app.include_router(forecast_router,  prefix="/api/forecast")
+app.include_router(portfolio_agent_router, prefix="/api/portfolio-agent")
 
 
 @app.get("/")

@@ -33,6 +33,9 @@ def _execute(job: dict, sink) -> dict:
         return run_single_stock_analysis(p["ticker"],
                                          user_id=job["user_id"], username=job["username"],
                                          step_callback=step_cb, task_callback=task_cb)
+    if job["kind"] == "portfolio_strategy":
+        from src.portfolio_agent import job as strategy_job
+        return strategy_job.run(p, sink)
     raise ValueError(f"Unknown job kind: {job['kind']}")
 
 
@@ -52,7 +55,8 @@ def run_job(job: dict) -> None:
         result = _execute(job, lambda payload: service.add_event(job_id, payload))
         if result.get("error") and not result.get("picks"):
             raise RuntimeError(result["error"])
-        _persist_picks(result, job["user_id"], job["username"])
+        if job["kind"] in ("market_scan", "deep_analysis"):
+            _persist_picks(result, job["user_id"], job["username"])
         service.finish(job_id, result)
     except Exception as e:
         logger.exception("job %s failed", job_id)
